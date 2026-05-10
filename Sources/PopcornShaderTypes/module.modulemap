@@ -1,0 +1,4 @@
+module PopcornShaderTypes {
+    header "PopcornKernelTypes.h"
+    export *
+}

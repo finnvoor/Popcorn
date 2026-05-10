@@ -1,0 +1,31 @@
+[tasks.build]
+run = "swift build --build-system swiftbuild"
+
+[tasks.test]
+run = "swift test --build-system swiftbuild"
+
+[tasks.format.tools]
+swiftformat = "latest"
+[tasks.format]
+description = "Format Swift source files"
+depends_post = ['lint']
+run = "swiftformat ."
+
+[tasks.lint.tools]
+swiftformat = "latest"
+[tasks.lint]
+description = 'Lint Swift files in the project'
+usage = '''
+flag "--github-actions" help="Render warnings, errors, and results to GitHub"
+'''
+run = """
+if [ '{{flag(name='github-actions')}}' = 'true' ]; then
+    swiftformat --lint . --reporter github-actions-log
+else
+    swiftformat --lint .
+fi
+"""
+
+[tasks.gemma-cli]
+description = "Run the Gemma CLI demo"
+run = "swift run --build-system swiftbuild -c release --package-path Examples/GemmaCLI gemma-cli"

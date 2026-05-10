@@ -1,0 +1,53 @@
+import Metal
+import PopcornShaderTypes
+
+public extension Kernels {
+    struct Mul: Kernel {
+        // MARK: Lifecycle
+
+        public init(a: Tensor, b: Tensor, out: Tensor, count: Int) throws {
+            self.a = a
+            self.b = b
+            self.out = out
+            functionName = switch a.dataType {
+            case .f32: "mul"
+            case .f16: "mul_f16"
+            case .bf16: "mul_bf16"
+            default: throw PopcornError.unsupportedDataTypeCombination("Unsupported mul data type: \(a.dataType).")
+            }
+            constants = [MulConstants(count: UInt32(count))]
+            grid = MTLSize(width: count, height: 1, depth: 1)
+        }
+
+        public init(_ a: Tensor, _ b: Tensor, into out: Tensor) throws {
+            guard a.shape == b.shape else {
+                throw PopcornError.tensorShapeMismatch("Mul requires matching input shapes; got \(a.shape.dimensions) and \(b.shape.dimensions).")
+            }
+            guard a.shape == out.shape else {
+                throw PopcornError.tensorShapeMismatch("Mul output shape must match inputs; got \(out.shape.dimensions), expected \(a.shape.dimensions).")
+            }
+            try self.init(a: a, b: b, out: out, count: a.shape.elementCount)
+        }
+
+        // MARK: Public
+
+        public let functionName: String
+        public let constants: [any BitwiseCopyable]
+        public let grid: MTLSize
+        public let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
+
+        public var tensors: [Tensor.Binding] {
+            [
+                .init(tensor: a, access: .read),
+                .init(tensor: b, access: .read),
+                .init(tensor: out, access: .write)
+            ]
+        }
+
+        // MARK: Private
+
+        private let a: Tensor
+        private let b: Tensor
+        private let out: Tensor
+    }
+}
