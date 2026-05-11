@@ -23,7 +23,8 @@ public extension Kernels {
                 Hd2: UInt32(halfHeadDim),
                 scaling: attentionScaling
             )]
-            dispatchGrid = MTLSize(width: seqLen, height: halfHeadDim, depth: 1)
+            rowCount = seqLen
+            columnCount = halfHeadDim
         }
 
         public init(
@@ -62,13 +63,14 @@ public extension Kernels {
             ]
         }
 
-        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
-            (dispatchGrid, MTLSize(width: 8, height: 8, depth: 1))
+        public func dispatchSize(for pipelineState: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            DispatchSize.rowsColumns(rowCount: rowCount, columnCount: columnCount, pipelineState: pipelineState)
         }
 
         // MARK: Private
 
-        private let dispatchGrid: MTLSize
+        private let rowCount: Int
+        private let columnCount: Int
         private let positions: Tensor
         private let invFreq: Tensor
         private let cosOut: Tensor

@@ -26,7 +26,43 @@ enum DispatchSize {
         )
     }
 
+    static func rowsColumns(
+        rowCount: Int,
+        columnCount: Int,
+        pipelineState: MTLComputePipelineState
+    ) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+        columnsFirst(rowCount: rowCount, columnCount: columnCount, maxThreads: 256, pipelineState: pipelineState)
+    }
+
     // MARK: Private
+
+    private static func columnsFirst(
+        rowCount: Int,
+        columnCount: Int,
+        maxThreads: Int,
+        pipelineState: MTLComputePipelineState
+    ) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+        let simdWidth = max(1, pipelineState.threadExecutionWidth)
+        let maxThreads = max(
+            simdWidth,
+            roundDown(min(maxThreads, pipelineState.maxTotalThreadsPerThreadgroup), toMultipleOf: simdWidth)
+        )
+
+        let threadgroupHeight: Int
+        let threadgroupWidth: Int
+        if columnCount >= simdWidth {
+            threadgroupHeight = max(simdWidth, roundUp(min(columnCount, maxThreads), toMultipleOf: simdWidth))
+            threadgroupWidth = 1
+        } else {
+            threadgroupHeight = max(1, columnCount)
+            threadgroupWidth = max(1, min(rowCount, maxThreads / threadgroupHeight))
+        }
+
+        return (
+            MTLSize(width: rowCount, height: columnCount, depth: 1),
+            MTLSize(width: threadgroupWidth, height: threadgroupHeight, depth: 1)
+        )
+    }
 
     private static func preferredThreadgroupWidth(
         rowCount: Int,

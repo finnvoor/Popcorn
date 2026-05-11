@@ -27,7 +27,8 @@ public extension Kernels {
                 srcRowStride: UInt32(srcRowStride),
                 rowOffset: UInt32(rowOffset)
             )]
-            dispatchGrid = MTLSize(width: rowCount, height: columnCount, depth: 1)
+            self.rowCount = rowCount
+            self.columnCount = columnCount
         }
 
         public init(_ src: Tensor, into out: Tensor, rowOffset: Int) throws {
@@ -58,13 +59,14 @@ public extension Kernels {
             ]
         }
 
-        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
-            (dispatchGrid, MTLSize(width: 8, height: 8, depth: 1))
+        public func dispatchSize(for pipelineState: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            DispatchSize.rowsColumns(rowCount: rowCount, columnCount: columnCount, pipelineState: pipelineState)
         }
 
         // MARK: Private
 
-        private let dispatchGrid: MTLSize
+        private let rowCount: Int
+        private let columnCount: Int
         private let src: Tensor
         private let out: Tensor
     }
