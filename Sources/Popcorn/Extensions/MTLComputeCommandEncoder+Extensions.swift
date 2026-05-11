@@ -12,7 +12,8 @@ public extension MTLComputeCommandEncoder {
             setConstants(value, index: kernel.tensors.count + index)
         }
 
-        dispatchThreads(kernel.grid, threadsPerThreadgroup: kernel.threadgroupSize)
+        let dispatchSize = kernel.dispatchSize(for: pipelineState)
+        dispatchThreads(dispatchSize.grid, threadsPerThreadgroup: dispatchSize.threadgroupSize)
     }
 
     /// necessary to open the existential

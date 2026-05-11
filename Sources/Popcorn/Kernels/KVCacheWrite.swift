@@ -31,7 +31,7 @@ public extension Kernels {
                 Hd: UInt32(headDim),
                 offset: UInt32(offset)
             )]
-            grid = MTLSize(width: batch * kvHeads * newLen * headDim, height: 1, depth: 1)
+            dispatchGrid = MTLSize(width: batch * kvHeads * newLen * headDim, height: 1, depth: 1)
         }
 
         public init(source: Tensor, cache: Tensor, offset: Int) throws {
@@ -51,8 +51,6 @@ public extension Kernels {
 
         public let functionName: String
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
 
         public var tensors: [Tensor.Binding] {
             [
@@ -61,8 +59,13 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (dispatchGrid, MTLSize(width: 256, height: 1, depth: 1))
+        }
+
         // MARK: Private
 
+        private let dispatchGrid: MTLSize
         private let source: Tensor
         private let cache: Tensor
     }

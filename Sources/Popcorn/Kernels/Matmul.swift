@@ -26,8 +26,8 @@ public extension Kernels {
                 )
                 functionName = configuration.functionName
                 constants = configuration.constants
-                grid = configuration.grid
-                threadgroupSize = configuration.threadgroupSize
+                dispatchGrid = configuration.grid
+                dispatchThreadgroupSize = configuration.threadgroupSize
                 return
             }
 
@@ -53,15 +53,15 @@ public extension Kernels {
                 let threadsPerTG = 128
                 let mTiles = (m + tileM - 1) / tileM
                 let nTiles = (n + tileN - 1) / tileN
-                grid = MTLSize(
+                dispatchGrid = MTLSize(
                     width: nTiles * threadsPerTG,
                     height: mTiles,
                     depth: 1
                 )
-                threadgroupSize = MTLSize(width: threadsPerTG, height: 1, depth: 1)
+                dispatchThreadgroupSize = MTLSize(width: threadsPerTG, height: 1, depth: 1)
             } else {
-                grid = MTLSize(width: m, height: n, depth: 1)
-                threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
+                dispatchGrid = MTLSize(width: m, height: n, depth: 1)
+                dispatchThreadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
             }
         }
 
@@ -97,8 +97,6 @@ public extension Kernels {
         public var functionName: String
 
         public var constants: [any BitwiseCopyable]
-        public var grid: MTLSize
-        public var threadgroupSize: MTLSize
 
         public var tensors: [Tensor.Binding] {
             [
@@ -108,11 +106,17 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (dispatchGrid, dispatchThreadgroupSize)
+        }
+
         // MARK: Private
 
         private let a: Tensor
         private let b: Tensor
         private let c: Tensor
+        private let dispatchGrid: MTLSize
+        private let dispatchThreadgroupSize: MTLSize
 
         private static func pickMPPTileM(
             m: Int,

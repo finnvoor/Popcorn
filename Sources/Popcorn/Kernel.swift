@@ -12,8 +12,7 @@ public protocol Kernel {
     var tensors: [Tensor.Binding] { get }
     var constants: [any BitwiseCopyable] { get }
 
-    var grid: MTLSize { get }
-    var threadgroupSize: MTLSize { get }
+    func dispatchSize(for pipelineState: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize)
 }
 
 public extension Kernel {

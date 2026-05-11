@@ -44,12 +44,11 @@ public extension Kernels {
             ]
         }
 
-        public var grid: MTLSize {
-            MTLSize(width: count, height: 1, depth: 1)
-        }
-
-        public var threadgroupSize: MTLSize {
-            MTLSize(width: 256, height: 1, depth: 1)
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (
+                MTLSize(width: count, height: 1, depth: 1),
+                MTLSize(width: 256, height: 1, depth: 1)
+            )
         }
 
         // MARK: Private

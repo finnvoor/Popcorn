@@ -27,12 +27,11 @@ private struct DummyKernel: Kernel {
         [shape, flags]
     }
 
-    var grid: MTLSize {
-        MTLSize(width: 1, height: 1, depth: 1)
-    }
-
-    var threadgroupSize: MTLSize {
-        MTLSize(width: 1, height: 1, depth: 1)
+    func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+        (
+            MTLSize(width: 1, height: 1, depth: 1),
+            MTLSize(width: 1, height: 1, depth: 1)
+        )
     }
 }
 

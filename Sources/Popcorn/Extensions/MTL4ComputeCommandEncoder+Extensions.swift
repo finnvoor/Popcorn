@@ -25,9 +25,10 @@ import Metal
 
         setArgumentTable(argumentTable)
 
+        let dispatchSize = kernel.dispatchSize(for: pipelineState)
         dispatchThreads(
-            threadsPerGrid: kernel.grid,
-            threadsPerThreadgroup: kernel.threadgroupSize
+            threadsPerGrid: dispatchSize.grid,
+            threadsPerThreadgroup: dispatchSize.threadgroupSize
         )
     }
 }

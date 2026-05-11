@@ -17,7 +17,7 @@ public extension Kernels {
                 Sk: UInt32(keyLen),
                 slidingWindow: Int32(slidingWindow ?? -1)
             )]
-            grid = MTLSize(width: queryLen, height: keyLen, depth: 1)
+            dispatchGrid = MTLSize(width: queryLen, height: keyLen, depth: 1)
         }
 
         public init(mask: Tensor, slidingWindow: Int? = nil) throws {
@@ -36,8 +36,6 @@ public extension Kernels {
 
         public let functionName: String = "attention_mask_build"
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
 
         public var tensors: [Tensor.Binding] {
             [
@@ -45,8 +43,13 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (dispatchGrid, MTLSize(width: 8, height: 8, depth: 1))
+        }
+
         // MARK: Private
 
+        private let dispatchGrid: MTLSize
         private let mask: Tensor
     }
 }

@@ -21,7 +21,7 @@ public extension Kernels {
                 K: UInt32(k),
                 H: UInt32(hiddenSize)
             )]
-            grid = MTLSize(width: rowCount, height: hiddenSize, depth: 1)
+            dispatchGrid = MTLSize(width: rowCount, height: hiddenSize, depth: 1)
         }
 
         public init(contrib: Tensor, weights: Tensor, into out: Tensor) throws {
@@ -42,8 +42,6 @@ public extension Kernels {
 
         public let functionName: String = "weighted_sum"
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
 
         public var tensors: [Tensor.Binding] {
             [
@@ -53,8 +51,13 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (dispatchGrid, MTLSize(width: 8, height: 8, depth: 1))
+        }
+
         // MARK: Private
 
+        private let dispatchGrid: MTLSize
         private let contrib: Tensor
         private let weights: Tensor
         private let out: Tensor

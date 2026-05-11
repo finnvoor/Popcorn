@@ -23,7 +23,7 @@ public extension Kernels {
             default: throw PopcornError.unsupportedDataTypeCombination("Unsupported embedding gather data type combination: \(table.dataType), \(out.dataType).")
             }
             constants = [EmbeddingGatherConstants(N: UInt32(tokenCount), H: UInt32(hiddenSize))]
-            grid = MTLSize(width: tokenCount, height: hiddenSize, depth: 1)
+            dispatchGrid = MTLSize(width: tokenCount, height: hiddenSize, depth: 1)
         }
 
         public init(ids: Tensor, table: Tensor, into out: Tensor) throws {
@@ -41,8 +41,6 @@ public extension Kernels {
 
         public let functionName: String
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize = MTLSize(width: 1, height: 64, depth: 1)
 
         public var tensors: [Tensor.Binding] {
             [
@@ -52,8 +50,13 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (dispatchGrid, MTLSize(width: 1, height: 64, depth: 1))
+        }
+
         // MARK: Private
 
+        private let dispatchGrid: MTLSize
         private let ids: Tensor
         private let table: Tensor
         private let out: Tensor

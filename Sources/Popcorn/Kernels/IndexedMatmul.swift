@@ -25,7 +25,7 @@ public extension Kernels {
                 M: UInt32(outDim),
                 transposeW: transposeW ? 1 : 0
             )]
-            grid = MTLSize(width: rowCount, height: outDim, depth: 1)
+            dispatchGrid = MTLSize(width: rowCount, height: outDim, depth: 1)
         }
 
         public init(_ x: Tensor, weights: Tensor, expertIndex: Tensor, into out: Tensor, transposeW: Bool = false) throws {
@@ -51,8 +51,6 @@ public extension Kernels {
 
         public let functionName: String = "indexed_matmul"
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
 
         public var tensors: [Tensor.Binding] {
             [
@@ -63,8 +61,13 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (dispatchGrid, MTLSize(width: 8, height: 8, depth: 1))
+        }
+
         // MARK: Private
 
+        private let dispatchGrid: MTLSize
         private let x: Tensor
         private let weights: Tensor
         private let expertIndex: Tensor

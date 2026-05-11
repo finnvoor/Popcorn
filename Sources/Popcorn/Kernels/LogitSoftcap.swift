@@ -15,7 +15,7 @@ public extension Kernels {
             default: throw PopcornError.unsupportedDataTypeCombination("Unsupported logit softcap data type: \(x.dataType).")
             }
             constants = [LogitSoftcapConstants(count: UInt32(count), cap: cap)]
-            grid = MTLSize(width: count, height: 1, depth: 1)
+            dispatchGrid = MTLSize(width: count, height: 1, depth: 1)
         }
 
         public init(_ x: Tensor, cap: Float, into out: Tensor) throws {
@@ -29,8 +29,6 @@ public extension Kernels {
 
         public let functionName: String
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
 
         public var tensors: [Tensor.Binding] {
             [
@@ -39,8 +37,13 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (dispatchGrid, MTLSize(width: 256, height: 1, depth: 1))
+        }
+
         // MARK: Private
 
+        private let dispatchGrid: MTLSize
         private let x: Tensor
         private let out: Tensor
     }

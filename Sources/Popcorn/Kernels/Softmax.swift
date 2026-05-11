@@ -23,9 +23,8 @@ public extension Kernels {
             default: throw PopcornError.unsupportedDataTypeCombination("Unsupported softmax data type combination: \(x.dataType), \(out.dataType).")
             }
             constants = [SoftmaxConstants(N: UInt32(n))]
-            let tgSize = min(1024, max(32, nextPowerOfTwo(min(n, 256))))
-            grid = MTLSize(width: tgSize * rowCount, height: 1, depth: 1)
-            threadgroupSize = MTLSize(width: tgSize, height: 1, depth: 1)
+            self.rowCount = rowCount
+            self.n = n
         }
 
         public init(_ x: Tensor, into out: Tensor, axis: Int = -1) throws {
@@ -47,8 +46,6 @@ public extension Kernels {
 
         public let functionName: String
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize: MTLSize
 
         public var tensors: [Tensor.Binding] {
             [
@@ -57,17 +54,15 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for pipelineState: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            DispatchSize.reduction(rowCount: rowCount, n: n, pipelineState: pipelineState)
+        }
+
         // MARK: Private
 
         private let x: Tensor
         private let out: Tensor
+        private let rowCount: Int
+        private let n: Int
     }
-}
-
-private func nextPowerOfTwo(_ n: Int) -> Int {
-    var v = 1
-    while v < n {
-        v <<= 1
-    }
-    return v
 }

@@ -23,7 +23,7 @@ public extension Kernels {
                 Hd2: UInt32(halfHeadDim),
                 scaling: attentionScaling
             )]
-            grid = MTLSize(width: seqLen, height: halfHeadDim, depth: 1)
+            dispatchGrid = MTLSize(width: seqLen, height: halfHeadDim, depth: 1)
         }
 
         public init(
@@ -52,8 +52,6 @@ public extension Kernels {
 
         public let functionName: String = "rope_build_cos_sin"
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize = MTLSize(width: 8, height: 8, depth: 1)
 
         public var tensors: [Tensor.Binding] {
             [
@@ -64,8 +62,13 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (dispatchGrid, MTLSize(width: 8, height: 8, depth: 1))
+        }
+
         // MARK: Private
 
+        private let dispatchGrid: MTLSize
         private let positions: Tensor
         private let invFreq: Tensor
         private let cosOut: Tensor

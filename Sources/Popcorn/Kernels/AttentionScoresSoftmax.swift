@@ -36,9 +36,8 @@ public extension Kernels {
                 Sq: UInt32(queryLen), Sk: UInt32(keyLen), Hd: UInt32(headDim),
                 slidingWindow: Int32(slidingWindow ?? -1), scale: scale
             )]
-            let tgSize = min(1024, max(32, nextPowerOfTwo(min(keyLen, 256))))
-            grid = MTLSize(width: tgSize * batch * queryHeads * queryLen, height: 1, depth: 1)
-            threadgroupSize = MTLSize(width: tgSize, height: 1, depth: 1)
+            rowCount = batch * queryHeads * queryLen
+            self.keyLen = keyLen
         }
 
         public init(
@@ -71,8 +70,6 @@ public extension Kernels {
 
         public let functionName: String
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize: MTLSize
 
         public var tensors: [Tensor.Binding] {
             [
@@ -82,18 +79,16 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for pipelineState: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            DispatchSize.reduction(rowCount: rowCount, n: keyLen, pipelineState: pipelineState)
+        }
+
         // MARK: Private
 
         private let q: Tensor
         private let k: Tensor
         private let probs: Tensor
+        private let rowCount: Int
+        private let keyLen: Int
     }
-}
-
-private func nextPowerOfTwo(_ n: Int) -> Int {
-    var v = 1
-    while v < n {
-        v <<= 1
-    }
-    return v
 }

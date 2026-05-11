@@ -32,9 +32,8 @@ public extension Kernels {
                 addOneToWeight: addOneToWeight ? 1 : 0,
                 eps: eps
             )]
-            let tgSize = min(1024, max(32, nextPowerOfTwo(min(hiddenSize, 256))))
-            grid = MTLSize(width: tgSize * rowCount, height: 1, depth: 1)
-            threadgroupSize = MTLSize(width: tgSize, height: 1, depth: 1)
+            self.rowCount = rowCount
+            self.hiddenSize = hiddenSize
         }
 
         public init(
@@ -74,8 +73,6 @@ public extension Kernels {
 
         public let functionName: String
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize: MTLSize
 
         public var tensors: [Tensor.Binding] {
             [
@@ -85,18 +82,16 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for pipelineState: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            DispatchSize.reduction(rowCount: rowCount, n: hiddenSize, pipelineState: pipelineState)
+        }
+
         // MARK: Private
 
         private let x: Tensor
         private let weight: Tensor
         private let out: Tensor
+        private let rowCount: Int
+        private let hiddenSize: Int
     }
-}
-
-private func nextPowerOfTwo(_ n: Int) -> Int {
-    var v = 1
-    while v < n {
-        v <<= 1
-    }
-    return v
 }

@@ -15,7 +15,7 @@ public extension Kernels {
             self.indices = indices
             self.out = out
             constants = [GatherConstants(count: UInt32(count))]
-            grid = MTLSize(width: count, height: 1, depth: 1)
+            dispatchGrid = MTLSize(width: count, height: 1, depth: 1)
         }
 
         public init(table: Tensor, indices: Tensor, into out: Tensor) throws {
@@ -29,8 +29,6 @@ public extension Kernels {
 
         public let functionName: String = "gather"
         public let constants: [any BitwiseCopyable]
-        public let grid: MTLSize
-        public let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
 
         public var tensors: [Tensor.Binding] {
             [
@@ -40,8 +38,13 @@ public extension Kernels {
             ]
         }
 
+        public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
+            (dispatchGrid, MTLSize(width: 256, height: 1, depth: 1))
+        }
+
         // MARK: Private
 
+        private let dispatchGrid: MTLSize
         private let table: Tensor
         private let indices: Tensor
         private let out: Tensor
