@@ -44,7 +44,9 @@ import Metal
                         page.contents()
                             .advanced(by: alignedOffset)
                             .copyMemory(from: source, byteCount: bytes.count)
-                        page.didModifyRange(alignedOffset..<(alignedOffset + bytes.count))
+                        // didModifyRange is only meaningful for managed
+                        // storage. Our pages are shared+untracked, so skipping
+                        // the call avoids the per-constant CFI/objc-msg cost.
                     }
                     offset = alignedOffset + byteCount
                     return page.gpuAddress + UInt64(alignedOffset)
@@ -90,7 +92,7 @@ import Metal
         let length = max(pageSize, minLength)
         guard let buffer = device.makeBuffer(
             length: length,
-            options: [.storageModeShared, .cpuCacheModeWriteCombined]
+            options: [.storageModeShared, .cpuCacheModeWriteCombined, .hazardTrackingModeUntracked]
         ) else {
             throw PopcornError.constantAllocationFailed(byteCount: length)
         }

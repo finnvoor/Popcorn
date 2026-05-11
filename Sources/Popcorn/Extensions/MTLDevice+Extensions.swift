@@ -4,7 +4,7 @@ public extension MTLDevice {
     func makeTensor(
         shape: Tensor.Shape,
         dataType: Tensor.DataType = .f32,
-        options: MTLResourceOptions = .storageModeShared,
+        options: MTLResourceOptions = [.storageModeShared, .hazardTrackingModeUntracked],
         label: String? = nil
     ) throws -> Tensor {
         let byteCount = max(shape.elementCount * dataType.stride, 1)
@@ -18,7 +18,7 @@ public extension MTLDevice {
     func makeTensor<Element: TensorElement>(
         values: [Element],
         shape: Tensor.Shape,
-        options: MTLResourceOptions = .storageModeShared,
+        options: MTLResourceOptions = [.storageModeShared, .hazardTrackingModeUntracked],
         label: String? = nil
     ) throws -> Tensor {
         precondition(values.count == shape.elementCount, "Tensor values count must match shape element count")

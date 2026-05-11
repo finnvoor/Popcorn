@@ -52,7 +52,30 @@ stable measurement.
 - `mise build` and `mise test` must continue to pass.
 
 ## What's Been Tried
-(empty — baseline below)
+- **Argmax over 262k logits was a single-thread serial scan** — replaced with a
+  parallel reduction kernel (`argmax_row`). Single biggest win: +22% (8.49 →
+  10.38 tok/s).
+- **Skip Transpose12 when T=1**: the layout transform `[B,T=1,Nh,Hd]` ↔
+  `[B,Nh,T=1,Hd]` is identity. Skipped 4 dispatches per layer in decode. Plus
+  SwigluMatvec fusion (gate+up+gelu+mul → 1 kernel). Together +1.3%.
+- **Skip RowSlice2D when T=1** (row 0 of a 1-row tensor is the whole tensor)
+  and **skip LogitSoftcap before argmax** (tanh is monotonic). +0.6%.
+- **Tried but discarded**: matvec simd8/simd16 (register pressure / no gain),
+  MPP matvec for transposed (8× wasted compute since TileM=8 vs M=1),
+  RMSNorm with simdgroup reduction (no GPU time change), AddRMSNorm fusion (no
+  effect), FusedKVCacheWrite (no effect), staging x in TG memory (regression).
+- **Diagnostic findings** (informed future work):
+  - GPU 90.5 ms vs wait 91.5 ms — commit-feedback overhead is negligible (<1 ms).
+  - Barriers (with `.device` visibility) collectively cost ~5 ms / token —
+    fusion ceiling for non-matvec speedups is ~6%.
+  - Matvec bandwidth utilization: 37 GB/s achieved on M1 (peak ~68 GB/s, real-
+    world streaming ~50 GB/s). Roughly bandwidth-bound. To beat the matvec
+    floor we'd need to read fewer weight bytes (quantization is disallowed).
+  - CPU encoding takes 5–7 ms / token — small but real, dominated by argument-
+    table bind calls.
+
+## Open Ideas
+See `autoresearch.ideas.md`.
 
 ## Hot Path (decode, t=1)
 Per layer:
