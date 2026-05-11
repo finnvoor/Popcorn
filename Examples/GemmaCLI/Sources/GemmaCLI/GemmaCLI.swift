@@ -114,7 +114,8 @@ import Tokenizers
         if calls > 0 {
             let encMs = Gemma4TextInference.debugEncodeSeconds * 1000 / Double(calls)
             let waitMs = Gemma4TextInference.debugCommitWaitSeconds * 1000 / Double(calls)
-            report += String(format: "Per submit: encode %.2f ms, wait %.2f ms (%d calls)\n", encMs, waitMs, calls)
+            let gpuMs = Gemma4TextInference.debugGPUSeconds * 1000 / Double(calls)
+            report += String(format: "Per submit: encode %.2f ms, wait %.2f ms, gpu %.2f ms (%d calls)\n", encMs, waitMs, gpuMs, calls)
         }
         FileHandle.standardError.write(Data(report.utf8))
     }

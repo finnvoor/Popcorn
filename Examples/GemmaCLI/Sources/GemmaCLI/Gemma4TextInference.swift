@@ -82,6 +82,7 @@ final class Gemma4TextInference {
 
     nonisolated(unsafe) static var debugEncodeSeconds: Double = 0
     nonisolated(unsafe) static var debugCommitWaitSeconds: Double = 0
+    nonisolated(unsafe) static var debugGPUSeconds: Double = 0
     nonisolated(unsafe) static var debugCallCount: Int = 0
 
     func submit(inputIds: [Int], offset: Int) throws -> PendingForward {
@@ -119,6 +120,8 @@ final class Gemma4TextInference {
         let options = MTL4CommitOptions()
         options.addFeedbackHandler { [constants] commitFeedback in
             constants.reset()
+            let gpu = commitFeedback.gpuEndTime - commitFeedback.gpuStartTime
+            if gpu > 0 { Gemma4TextInference.debugGPUSeconds += gpu }
             feedback.finish(error: commitFeedback.error)
         }
         commandQueue.commit([commandBuffer], options: options)
