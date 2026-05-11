@@ -4,9 +4,25 @@ Computing dependencies
 Constructing description
 Pre-planning 1 / 950
 Planning deferred tasks
-[100/100] gemma-cli-product 3 / 3
+[46/100] Popcorn 1 / 2
+[60/100] Popcorn 2 / 3
+[50/100] Popcorn 7 / 13
+[52/100] Popcorn 8 / 14
+[91/100] gemma-cli-product 13 / 14
+[92/100] gemma-cli-product 14 / 15
+[92/100] gemma-cli-product 16 / 17
+[93/100] gemma-cli-product 17 / 18
+[84/100] Popcorn_Popcorn 21 / 26
+[81/100] Popcorn_Popcorn 24 / 31
+[89/100] Popcorn 26 / 30
+[97/100] gemma-cli-product 32 / 33
+warning: input verification failed
+note: while processing /Users/finnvoorhees/Developer/swift/Popcorn/Examples/GemmaCLI/.build/out/Intermediates.noindex/GemmaCLI.build/Release/gemma-cli.build/Objects-normal/arm64/GemmaCLI.o
+warning: input verification failed
+note: while processing /Users/finnvoorhees/Developer/swift/Popcorn/Examples/GemmaCLI/.build/out/Intermediates.noindex/GemmaCLI.build/Release/gemma-cli.build/Objects-normal/x86_64/GemmaCLI.o
+[97/100] gemma-cli-product 36 / 37
 [100/100] 
-Build complete! (1.38 secs)
+Build complete! (22.28 secs)
 
-Prompt:        6 tokens,   40.22 tok/s
-Generation:   64 tokens,    8.49 tok/s
+Prompt:        6 tokens,   28.21 tok/s
+Generation:   64 tokens,   10.38 tok/s

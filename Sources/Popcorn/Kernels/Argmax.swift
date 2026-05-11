@@ -14,7 +14,19 @@ public extension Kernels {
             self.x = x
             self.indices = indices
             constants = [ArgmaxConstants(rows: UInt32(rowCount), N: UInt32(n))]
-            grid = MTLSize(width: rowCount, height: 1, depth: 1)
+            // For large N use a parallel per-row reduction. Otherwise fall
+            // back to the single-thread-per-row kernel (good when there are
+            // many small rows).
+            if n >= 1024 {
+                functionName = "argmax_row"
+                let tgWidth = min(1024, max(32, (n + 31) / 32 * 32))
+                grid = MTLSize(width: rowCount * tgWidth, height: 1, depth: 1)
+                threadgroupSize = MTLSize(width: tgWidth, height: 1, depth: 1)
+            } else {
+                functionName = "argmax"
+                grid = MTLSize(width: rowCount, height: 1, depth: 1)
+                threadgroupSize = MTLSize(width: 64, height: 1, depth: 1)
+            }
         }
 
         public init(_ x: Tensor, indices: Tensor, axis: Int = -1) throws {
@@ -34,10 +46,10 @@ public extension Kernels {
 
         // MARK: Public
 
-        public let functionName: String = "argmax"
+        public let functionName: String
         public let constants: [any BitwiseCopyable]
         public let grid: MTLSize
-        public let threadgroupSize = MTLSize(width: 64, height: 1, depth: 1)
+        public let threadgroupSize: MTLSize
 
         public var tensors: [Tensor.Binding] {
             [
