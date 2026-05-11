@@ -33,7 +33,18 @@ public final class KernelLibrary {
 
         guard let function else { throw PopcornError.kernelFunctionNotFound(functionName) }
 
-        let pipelineState = try device.makeComputePipelineState(function: function)
+        // All Popcorn kernels in this library launch with threadgroups that
+        // are a multiple of the thread execution width (32 on Apple GPUs).
+        // Asserting this lets the compiler drop the per-thread bounds checks
+        // that the kernels would otherwise need to perform on the tail wave.
+        let descriptor = MTLComputePipelineDescriptor()
+        descriptor.computeFunction = function
+        descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth = true
+        let pipelineState = try device.makeComputePipelineState(
+            descriptor: descriptor,
+            options: [],
+            reflection: nil
+        )
         cache[functionName] = pipelineState
         return pipelineState
     }
