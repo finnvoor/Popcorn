@@ -110,6 +110,12 @@ import Tokenizers
         var report = "\n"
         report += String(format: "Prompt:     %4d tokens, %7.2f tok/s\n", promptTokens, promptRate)
         report += String(format: "Generation: %4d tokens, %7.2f tok/s\n", generatedTokens, generationRate)
+        let calls = Gemma4TextInference.debugCallCount
+        if calls > 0 {
+            let encMs = Gemma4TextInference.debugEncodeSeconds * 1000 / Double(calls)
+            let waitMs = Gemma4TextInference.debugCommitWaitSeconds * 1000 / Double(calls)
+            report += String(format: "Per submit: encode %.2f ms, wait %.2f ms (%d calls)\n", encMs, waitMs, calls)
+        }
         FileHandle.standardError.write(Data(report.utf8))
     }
 }

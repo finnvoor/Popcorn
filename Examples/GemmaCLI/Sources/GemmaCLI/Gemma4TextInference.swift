@@ -3,6 +3,11 @@ import Metal
 import MTLSafeTensors
 import Popcorn
 
+private func secs(_ a: ContinuousClock.Instant, _ b: ContinuousClock.Instant) -> Double {
+    let d = b - a
+    return Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
+}
+
 // MARK: - Gemma4TextInference
 
 final class Gemma4TextInference {
@@ -56,6 +61,8 @@ final class Gemma4TextInference {
 
         func wait() throws -> Int {
             try feedback.wait()
+            let t = ContinuousClock.now
+            Gemma4TextInference.debugCommitWaitSeconds += secs(encodeEnd, t)
             let ptr = nextTokenBuffer.contents().bindMemory(to: Int32.self, capacity: 1)
             return Int(ptr[0])
         }
@@ -64,6 +71,7 @@ final class Gemma4TextInference {
 
         fileprivate let feedback: CommitFeedbackBox
         fileprivate let nextTokenBuffer: MTLBuffer
+        fileprivate let encodeEnd: ContinuousClock.Instant
     }
 
     let config: Gemma4Config
@@ -71,6 +79,10 @@ final class Gemma4TextInference {
     func nextToken(inputIds: [Int], offset: Int) throws -> Int {
         try submit(inputIds: inputIds, offset: offset).wait()
     }
+
+    nonisolated(unsafe) static var debugEncodeSeconds: Double = 0
+    nonisolated(unsafe) static var debugCommitWaitSeconds: Double = 0
+    nonisolated(unsafe) static var debugCallCount: Int = 0
 
     func submit(inputIds: [Int], offset: Int) throws -> PendingForward {
         guard !inputIds.isEmpty else { throw GemmaError.message("Empty input.") }
@@ -80,6 +92,7 @@ final class Gemma4TextInference {
             )
         }
 
+        let t0 = ContinuousClock.now
         writeTokenIds(inputIds)
         writePositions(count: inputIds.count, offset: offset)
 
@@ -109,8 +122,11 @@ final class Gemma4TextInference {
             feedback.finish(error: commitFeedback.error)
         }
         commandQueue.commit([commandBuffer], options: options)
+        let t1 = ContinuousClock.now
+        Self.debugEncodeSeconds += secs(t0, t1)
+        Self.debugCallCount += 1
 
-        return PendingForward(feedback: feedback, nextTokenBuffer: workspace.nextToken.buffer)
+        return PendingForward(feedback: feedback, nextTokenBuffer: workspace.nextToken.buffer, encodeEnd: t1)
     }
 
     // MARK: Private
