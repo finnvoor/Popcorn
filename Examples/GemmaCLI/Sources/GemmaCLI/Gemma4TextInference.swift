@@ -169,10 +169,19 @@ final class Gemma4TextInference {
         let current = currentIsH1 ? workspace.h1(t) : workspace.h0(t)
         let finalNorm = workspace.normHidden(t)
         try encoder.encode(Kernels.RMSNorm(current, weight: weights.finalNorm, into: finalNorm, eps: config.rmsNormEps))
-        try encoder.encode(Kernels.RowSlice2D(finalNorm, into: workspace.lastHidden, rowOffset: t - 1))
-        try encoder.encode(Kernels.Matmul(workspace.lastHidden, weights.embedTokens, into: workspace.logits, transposeB: true))
-        try encoder.encode(Kernels.LogitSoftcap(workspace.logits, cap: config.finalLogitSoftcap, into: workspace.cappedLogits))
-        try encoder.encode(Kernels.Argmax(workspace.cappedLogits, indices: workspace.nextToken))
+
+        let lastHidden: Tensor
+        if t == 1 {
+            // Row 0 of a [1, H] tensor is the whole tensor; just re-view it.
+            lastHidden = workspace.normHidden.view(shape: [1, config.hiddenSize])
+        } else {
+            try encoder.encode(Kernels.RowSlice2D(finalNorm, into: workspace.lastHidden, rowOffset: t - 1))
+            lastHidden = workspace.lastHidden
+        }
+        try encoder.encode(Kernels.Matmul(lastHidden, weights.embedTokens, into: workspace.logits, transposeB: true))
+        // LogitSoftcap(x) = tanh(x/cap) * cap is strictly monotonic, so for
+        // greedy argmax it is a no-op. Skip the read+write of all 262k logits.
+        try encoder.encode(Kernels.Argmax(workspace.logits, indices: workspace.nextToken))
     }
 
     private func encodePerLayerInputs(ids: Tensor, inputEmbeds: Tensor, tokenCount t: Int, encoder: HazardTrackingEncoder) throws {

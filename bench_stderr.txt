@@ -12,8 +12,8 @@ Planning deferred tasks
 [93/100] gemma-cli-product 11 / 12
 [94/100] gemma-cli-product 15 / 16
 [100/100] 
-Build complete! (16.06 secs)
+Build complete! (16.65 secs)
 
-Prompt:        6 tokens,   46.36 tok/s
-Generation:   64 tokens,   10.51 tok/s
-Per submit: encode 5.35 ms, wait 91.78 ms, gpu 90.88 ms (64 calls)
+Prompt:        6 tokens,   44.60 tok/s
+Generation:   64 tokens,   10.57 tok/s
+Per submit: encode 5.20 ms, wait 91.51 ms, gpu 90.56 ms (64 calls)
