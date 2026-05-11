@@ -4,19 +4,16 @@ Computing dependencies
 Constructing description
 Pre-planning 1 / 950
 Planning deferred tasks
-Starting
 [57/100] gemma-cli-product 1 / 2
 [70/100] gemma-cli-product 2 / 3
 [81/100] gemma-cli-product 4 / 5
 [84/100] gemma-cli-product 5 / 6
-[74/100] Popcorn_Popcorn 11 / 16
-[84/100] Popcorn 17 / 21
-[100/100] gemma-cli-product 21 / 21
-[96/100] gemma-cli-product 22 / 23
-[97/100] gemma-cli-product 26 / 27
+[100/100] gemma-cli-product 10 / 10
+[93/100] gemma-cli-product 11 / 12
+[94/100] gemma-cli-product 15 / 16
 [100/100] 
-Build complete! (16.29 secs)
+Build complete! (16.06 secs)
 
-Prompt:        6 tokens,   38.72 tok/s
-Generation:   64 tokens,   10.38 tok/s
-Per submit: encode 7.01 ms, wait 91.74 ms, gpu 90.79 ms (64 calls)
+Prompt:        6 tokens,   46.36 tok/s
+Generation:   64 tokens,   10.51 tok/s
+Per submit: encode 5.35 ms, wait 91.78 ms, gpu 90.88 ms (64 calls)

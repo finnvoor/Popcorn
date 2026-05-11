@@ -316,7 +316,17 @@ final class Gemma4TextInference {
             ? workspace.slidingSin.view(shape: [t, headDim / 2])
             : workspace.fullSin.view(shape: [t, headDim / 2])
         try encoder.encode(Kernels.RopeApply(qNormed, cos: cos, sin: sin, into: qRoped))
-        try encoder.encode(Kernels.Transpose12(qRoped, into: qAttn))
+        let qAttnInput: Tensor
+        if t == 1 {
+            // Transpose12 of [B, T=1, Nh, Hd] -> [B, Nh, T=1, Hd] is a no-op:
+            // both layouts have the exact same memory order when T=1, so we
+            // can just re-view qRoped under the destination shape and skip the
+            // dispatch entirely.
+            qAttnInput = workspace.qRope.view(shape: [1, config.numAttentionHeads, 1, headDim])
+        } else {
+            try encoder.encode(Kernels.Transpose12(qRoped, into: qAttn))
+            qAttnInput = qAttn
+        }
 
         if ownsKVCache {
             let kHeads = workspace.kRaw.view(shape: [1, t, config.numKeyValueHeads, headDim])
@@ -330,15 +340,25 @@ final class Gemma4TextInference {
 
             try encoder.encode(Kernels.RMSNorm(vHeads, weight: nil, into: vNormed, eps: config.rmsNormEps))
             try encoder.encode(Kernels.RopeApply(kNormed, cos: cos, sin: sin, into: kRoped))
-            try encoder.encode(Kernels.Transpose12(kRoped, into: kAttnNew))
-            try encoder.encode(Kernels.Transpose12(vNormed, into: vAttnNew))
+            let kForCache: Tensor
+            let vForCache: Tensor
+            if t == 1 {
+                // Same no-op transpose: re-view directly under [B, Nkv, T, Hd].
+                kForCache = workspace.kRope.view(shape: [1, config.numKeyValueHeads, 1, headDim])
+                vForCache = workspace.vNorm.view(shape: [1, config.numKeyValueHeads, 1, headDim])
+            } else {
+                try encoder.encode(Kernels.Transpose12(kRoped, into: kAttnNew))
+                try encoder.encode(Kernels.Transpose12(vNormed, into: vAttnNew))
+                kForCache = kAttnNew
+                vForCache = vAttnNew
+            }
             try encoder.encode(Kernels.KVCacheWrite(
-                source: kAttnNew,
+                source: kForCache,
                 cache: workspace.kCaches[layerIndex].tensor(headDim: headDim, maxSeqLen: maxSeqLen),
                 offset: offset
             ))
             try encoder.encode(Kernels.KVCacheWrite(
-                source: vAttnNew,
+                source: vForCache,
                 cache: workspace.vCaches[layerIndex].tensor(headDim: headDim, maxSeqLen: maxSeqLen),
                 offset: offset
             ))
@@ -354,12 +374,22 @@ final class Gemma4TextInference {
         let attnNorm = workspace.attnNorm.view(shape: [t, config.hiddenSize])
 
         try encoder.encode(Kernels.AttentionScoresSoftmax(
-            q: qAttn, k: kCache, into: probs,
+            q: qAttnInput, k: kCache, into: probs,
             scale: 1, slidingWindow: isSliding ? config.slidingWindow : nil
         ))
-        try encoder.encode(Kernels.AttentionOutput(scores: probs, v: vCache, into: attnOut))
-        try encoder.encode(Kernels.Transpose12(attnOut, into: attnReshaped))
-        try encoder.encode(Kernels.Matmul(attnFlat, layer.oProj, into: attnProjected, transposeB: true))
+        // AttentionOutput writes [B, Nq, t, Hd]. The subsequent Transpose12 to
+        // [B, t, Nq, Hd] is a no-op when t=1, so we just point the matmul at
+        // the attn output buffer directly.
+        let attnFlatInput: Tensor
+        if t == 1 {
+            try encoder.encode(Kernels.AttentionOutput(scores: probs, v: vCache, into: attnOut))
+            attnFlatInput = workspace.attnOut.view(shape: [t, qWidth])
+        } else {
+            try encoder.encode(Kernels.AttentionOutput(scores: probs, v: vCache, into: attnOut))
+            try encoder.encode(Kernels.Transpose12(attnOut, into: attnReshaped))
+            attnFlatInput = attnFlat
+        }
+        try encoder.encode(Kernels.Matmul(attnFlatInput, layer.oProj, into: attnProjected, transposeB: true))
         try encoder.encode(Kernels.RMSNorm(attnProjected, weight: layer.postAttentionLayerNorm, into: attnNorm, eps: config.rmsNormEps))
         try encoder.encode(Kernels.Add(input, attnNorm, into: output))
     }
@@ -382,10 +412,14 @@ final class Gemma4TextInference {
         let down = workspace.mlpDown.view(shape: [t, config.hiddenSize])
         let ffnNorm = workspace.ffnNorm.view(shape: [t, config.hiddenSize])
 
-        try encoder.encode(Kernels.Matmul(normHidden, layer.gateProj, into: gate, transposeB: true))
-        try encoder.encode(Kernels.Matmul(normHidden, layer.upProj, into: up, transposeB: true))
-        try encoder.encode(Kernels.GeluTanh(gate, into: gateAct))
-        try encoder.encode(Kernels.Mul(gateAct, up, into: gated))
+        if t == 1, Kernels.SwigluMatvec.supports(x: normHidden.dataType, w: layer.gateProj.dataType, o: gated.dataType) {
+            try encoder.encode(Kernels.SwigluMatvec(x: normHidden, gate: layer.gateProj, up: layer.upProj, out: gated))
+        } else {
+            try encoder.encode(Kernels.Matmul(normHidden, layer.gateProj, into: gate, transposeB: true))
+            try encoder.encode(Kernels.Matmul(normHidden, layer.upProj, into: up, transposeB: true))
+            try encoder.encode(Kernels.GeluTanh(gate, into: gateAct))
+            try encoder.encode(Kernels.Mul(gateAct, up, into: gated))
+        }
         try encoder.encode(Kernels.Matmul(gated, layer.downProj, into: down, transposeB: true))
         try encoder.encode(Kernels.RMSNorm(down, weight: layer.postFeedforwardLayerNorm, into: ffnNorm, eps: config.rmsNormEps))
         try encoder.encode(Kernels.Add(input, ffnNorm, into: output))
