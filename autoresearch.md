@@ -52,27 +52,53 @@ stable measurement.
 - `mise build` and `mise test` must continue to pass.
 
 ## What's Been Tried
+
+### Real wins (kept)
 - **Argmax over 262k logits was a single-thread serial scan** — replaced with a
   parallel reduction kernel (`argmax_row`). Single biggest win: +22% (8.49 →
   10.38 tok/s).
 - **Skip Transpose12 when T=1**: the layout transform `[B,T=1,Nh,Hd]` ↔
   `[B,Nh,T=1,Hd]` is identity. Skipped 4 dispatches per layer in decode. Plus
-  SwigluMatvec fusion (gate+up+gelu+mul → 1 kernel). Together +1.3%.
+  SwigluMatvec fusion (gate+up+gelu+mul → 1 kernel). +1.3%.
 - **Skip RowSlice2D when T=1** (row 0 of a 1-row tensor is the whole tensor)
   and **skip LogitSoftcap before argmax** (tanh is monotonic). +0.6%.
-- **Tried but discarded**: matvec simd8/simd16 (register pressure / no gain),
-  MPP matvec for transposed (8× wasted compute since TileM=8 vs M=1),
-  RMSNorm with simdgroup reduction (no GPU time change), AddRMSNorm fusion (no
-  effect), FusedKVCacheWrite (no effect), staging x in TG memory (regression).
-- **Diagnostic findings** (informed future work):
-  - GPU 90.5 ms vs wait 91.5 ms — commit-feedback overhead is negligible (<1 ms).
-  - Barriers (with `.device` visibility) collectively cost ~5 ms / token —
-    fusion ceiling for non-matvec speedups is ~6%.
-  - Matvec bandwidth utilization: 37 GB/s achieved on M1 (peak ~68 GB/s, real-
-    world streaming ~50 GB/s). Roughly bandwidth-bound. To beat the matvec
-    floor we'd need to read fewer weight bytes (quantization is disallowed).
-  - CPU encoding takes 5–7 ms / token — small but real, dominated by argument-
-    table bind calls.
+- **Pipeline hint**: `threadGroupSizeIsMultipleOfThreadExecutionWidth=true`.
+  Lets the compiler drop tail-wave bounds checks. Tiny: CPU encode -5%.
+- **Untracked hazards + skip didModifyRange** on shared constant pages.
+  Correctness improvement; perf neutral.
+
+### Tried and discarded (with reasons)
+- matvec simd8 / simd16 — register pressure dominates the SG-overhead saving.
+- MPP matvec for transposed huge-N — TileM=8 wastes 8× compute when M=1.
+- RMSNorm with simdgroup reduction — not the bottleneck (output diverged a bit).
+- AddRMSNorm fusion at attn→MLP boundary — only ~35 dispatches saved (neutral).
+- FusedKVCacheWrite (norm+rope+transpose+cache_write → 1) — no measurable change.
+- Staging x in TG memory inside matvec — already L1 cached; staging hurts.
+- K-specialized matvec (compile-time K=1536, 6144) — compiler already optimizes.
+- Shader validation off, max-threads-per-TG hints — hint-only, no GPU effect.
+- storageModePrivate for GPU-only buffers — unified memory makes it a no-op.
+- Argument-table-per-dispatch → shared table — already cheap; sharing is safe.
+- POPCORN_NO_BARRIERS / POPCORN_FORCE_BARRIERS diagnostic runs (see below).
+
+### Diagnostic findings (use these to inform future work)
+- GPU 90.5 ms vs wait 91.5 ms — commit-feedback overhead is negligible (<1 ms).
+- Barriers (with `.device` visibility) collectively cost ~5 ms / token. The
+  fusion-ceiling for non-matvec speedups is ~6%.
+- Independent kernels overlap saves only ~3 ms vs forced-barrier-between-every-
+  dispatch — so Apple GPU is already pipelining what it can.
+- Matvec bandwidth utilization: 37 GB/s achieved on M1 (peak ~68 GB/s, real-
+  world streaming ~50 GB/s). Roughly bandwidth-bound. To beat the matvec
+  floor we'd need to read fewer weight bytes (quantization is disallowed).
+- CPU encoding takes 5–7 ms / token — small but real, dominated by argument-
+  table bind calls.
+- 1015 dispatches per decode token; ~75% of GPU time is in the big matvecs
+  (q/k/v/o/gate/up/down/ple-proj/logits), bandwidth-bound.
+
+### Net result
+Baseline 8.49 tok/s → 10.59 tok/s on M1 = **+24.7%**.
+Target of 13 tok/s is bandwidth-limited on M1 unfortunately; it would require
+weight quantization (disallowed) or Indirect Command Buffers + overlapped
+encode (significant refactor).
 
 ## Open Ideas
 See `autoresearch.ideas.md`.

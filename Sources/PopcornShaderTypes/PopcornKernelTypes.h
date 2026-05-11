@@ -168,3 +168,13 @@ typedef struct {
     uint32_t D2;
     uint32_t D3;
 } Transpose12Constants;
+
+typedef struct {
+    uint32_t B;
+    uint32_t Nq;
+    uint32_t Nkv;
+    uint32_t Sk;
+    uint32_t Hd;
+    int32_t  slidingWindow;
+    float    scale;
+} AttentionDecodeFusedConstants;

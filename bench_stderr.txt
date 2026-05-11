@@ -4,7 +4,23 @@ Computing dependencies
 Constructing description
 Pre-planning 1 / 950
 Planning deferred tasks
+[46/100] Popcorn 1 / 2
+[66/100] Popcorn 3 / 4
+[55/100] Popcorn 9 / 15
+[58/100] Popcorn 11 / 17
+[92/100] gemma-cli-product 17 / 18
+[93/100] gemma-cli-product 18 / 19
+[93/100] gemma-cli-product 20 / 21
+[93/100] gemma-cli-product 21 / 22
+[90/100] Popcorn_Popcorn 26 / 29
+[73/100] Popcorn_Popcorn 40 / 59
+[91/100] Popcorn_Popcorn 53 / 59
+[93/100] Popcorn_Popcorn 54 / 59
+[95/100] Popcorn 58 / 61
+[100/100] gemma-cli-product 61 / 61
+[98/100] gemma-cli-product 62 / 63
+[98/100] gemma-cli-product 66 / 67
 [100/100] 
-Build complete! (1.94 secs)
+Build complete! (26.75 secs)
 Error: The operation couldn’t be completed. (MTL4CommandQueueErrorDomain error 1.)
 [gemma-cli] ERROR task failed

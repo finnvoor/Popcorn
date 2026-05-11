@@ -382,21 +382,28 @@ final class Gemma4TextInference {
         let attnProjected = workspace.attnProjected.view(shape: [t, config.hiddenSize])
         let attnNorm = workspace.attnNorm.view(shape: [t, config.hiddenSize])
 
-        try encoder.encode(Kernels.AttentionScoresSoftmax(
-            q: qAttnInput, k: kCache, into: probs,
-            scale: 1, slidingWindow: isSliding ? config.slidingWindow : nil
-        ))
-        // AttentionOutput writes [B, Nq, t, Hd]. The subsequent Transpose12 to
-        // [B, t, Nq, Hd] is a no-op when t=1, so we just point the matmul at
-        // the attn output buffer directly.
         let attnFlatInput: Tensor
-        if t == 1 {
-            try encoder.encode(Kernels.AttentionOutput(scores: probs, v: vCache, into: attnOut))
+        if t == 1, Kernels.AttentionDecodeFused.supports(qDataType: qAttnInput.dataType, kvDataType: kCache.dataType, hd: headDim) {
+            // One fused streaming kernel replaces AttentionScoresSoftmax +
+            // AttentionOutput. probs is no longer materialized.
+            try encoder.encode(Kernels.AttentionDecodeFused(
+                q: qAttnInput, k: kCache, v: vCache, out: attnOut,
+                scale: 1, slidingWindow: isSliding ? config.slidingWindow : nil
+            ))
             attnFlatInput = workspace.attnOut.view(shape: [t, qWidth])
         } else {
-            try encoder.encode(Kernels.AttentionOutput(scores: probs, v: vCache, into: attnOut))
-            try encoder.encode(Kernels.Transpose12(attnOut, into: attnReshaped))
-            attnFlatInput = attnFlat
+            try encoder.encode(Kernels.AttentionScoresSoftmax(
+                q: qAttnInput, k: kCache, into: probs,
+                scale: 1, slidingWindow: isSliding ? config.slidingWindow : nil
+            ))
+            if t == 1 {
+                try encoder.encode(Kernels.AttentionOutput(scores: probs, v: vCache, into: attnOut))
+                attnFlatInput = workspace.attnOut.view(shape: [t, qWidth])
+            } else {
+                try encoder.encode(Kernels.AttentionOutput(scores: probs, v: vCache, into: attnOut))
+                try encoder.encode(Kernels.Transpose12(attnOut, into: attnReshaped))
+                attnFlatInput = attnFlat
+            }
         }
         try encoder.encode(Kernels.Matmul(attnFlatInput, layer.oProj, into: attnProjected, transposeB: true))
         try encoder.encode(Kernels.RMSNorm(attnProjected, weight: layer.postAttentionLayerNorm, into: attnNorm, eps: config.rmsNormEps))
