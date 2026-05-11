@@ -1,0 +1,12 @@
+[gemma-cli] $ swift run --build-system swiftbuild -c release --package-path Exa…
+Building for production...
+Computing dependencies
+Constructing description
+Pre-planning 1 / 950
+Planning deferred tasks
+[100/100] gemma-cli-product 3 / 3
+[100/100] 
+Build complete! (1.38 secs)
+
+Prompt:        6 tokens,   40.22 tok/s
+Generation:   64 tokens,    8.49 tok/s
