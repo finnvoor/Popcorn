@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct BFloat16ToFloat: Kernel {
+    struct BFloat16ToFloat: DispatchKernel {
         // MARK: Lifecycle
 
         public init(input: Tensor, output: Tensor, count: Int) {

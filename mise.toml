@@ -29,3 +29,45 @@ fi
 [tasks.gemma-cli]
 description = "Run the Gemma CLI demo"
 run = "swift run --build-system swiftbuild -c release --package-path Examples/GemmaCLI gemma-cli"
+
+[tasks.gemma-profile]
+description = "Run the Gemma CLI with per-dispatch GPU timing and print a per-kernel breakdown."
+run = '''
+run() {
+    set -euo pipefail
+    local profile="$(pwd)/gemma.profile.jsonl"
+    rm -f "$profile"
+    mise gemma-cli -- --profile "$profile" "$@"
+    echo
+    python3 Tools/profile-view.py "$profile"
+}
+run "$@"
+'''
+
+[tasks.gemma-cli-trace]
+description = "Capture a full Metal GPU trace (gigabytes; suitable for replay/debugging in Xcode)."
+env = { METAL_CAPTURE_ENABLED = "1" }
+run = "swift run --build-system swiftbuild -c release --package-path Examples/GemmaCLI gemma-cli --capture trace.gputrace"
+
+[tasks.gemma-cli-profile]
+description = "Record a Metal System Trace via Instruments. Produces a small gemma.trace with full GPU timeline + per-kernel labels."
+run = '''
+run() {
+    set -euo pipefail
+    cd Examples/GemmaCLI
+    swift build --build-system swiftbuild -c release >&2
+    local bin
+    bin="$(swift build --build-system swiftbuild -c release --show-bin-path)/gemma-cli"
+    local trace
+    trace="$(cd ../.. && pwd)/gemma.trace"
+    rm -rf "$trace"
+    xcrun xctrace record \
+        --template 'Metal System Trace' \
+        --output "$trace" \
+        --launch -- "$bin" "$@"
+    echo "Wrote $trace" >&2
+    open "$trace"
+}
+run "$@"
+'''
+

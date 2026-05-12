@@ -8,45 +8,24 @@ import Popcorn
 final class Gemma4TextInference {
     // MARK: Lifecycle
 
-    init(device: MTLDevice, modelDirectory: URL, maxSeqLen: Int) throws {
-        self.device = device
+    init(device: MTLDevice, modelDirectory: URL, maxSeqLen: Int, backend: KernelBackend = .metal4) throws {
         self.maxSeqLen = maxSeqLen
         config = try Gemma4Config.load(from: modelDirectory.appendingPathComponent("config.json"))
         guard maxSeqLen <= config.maxPositionEmbeddings else {
             throw GemmaError.message("maxSeqLen \(maxSeqLen) exceeds model max_position_embeddings \(config.maxPositionEmbeddings).")
         }
 
-        kernelLibrary = try KernelLibrary(device: device)
-        guard let queue = device.makeMTL4CommandQueue() else {
-            throw GemmaError.message("Could not create MTL4CommandQueue.")
-        }
-        commandQueue = queue
-        guard let allocator = device.makeCommandAllocator() else {
-            throw GemmaError.message("Could not create MTL4CommandAllocator.")
-        }
-        commandAllocator = allocator
+        let context = try Self.makeContext(backend: backend, device: device)
+        self.context = context
+        try Self.preallocateScratch(context, config: config, maxSeqLen: maxSeqLen)
 
-        let residencyDescriptor = MTLResidencySetDescriptor()
-        residencyDescriptor.label = "Gemma4.residency"
-        residencyDescriptor.initialCapacity = 4096
-        residencySet = try device.makeResidencySet(descriptor: residencyDescriptor)
-
-        argumentTables = ArgumentTablePool(device: device)
-
-        constants = Metal4ConstantArena(device: device, residencySet: residencySet, pageSize: 1 << 20)
-        try constants.preallocate(pageCount: 1)
-
-        archive = try device.makeSafeTensors(from: modelDirectory.appendingPathComponent("model.safetensors"))
+        let archive = try device.makeSafeTensors(from: modelDirectory.appendingPathComponent("model.safetensors"))
         weights = try Gemma4Weights(device: device, archive: archive, layerCount: config.numHiddenLayers)
         workspace = try Workspace(device: device, config: config, maxSeqLen: maxSeqLen)
         rope = try RopeTables(device: device, config: config)
 
-        for buffer in weights.allBuffers + workspace.allBuffers + rope.allBuffers {
-            residencySet.addAllocation(buffer)
-        }
-        residencySet.commit()
-        residencySet.requestResidency()
-        commandQueue.addResidencySet(residencySet)
+        context.addResidency(weights.allBuffers + workspace.allBuffers + rope.allBuffers)
+        context.commitResidency()
     }
 
     // MARK: Internal
@@ -68,75 +47,140 @@ final class Gemma4TextInference {
 
     let config: Gemma4Config
 
-    func nextToken(inputIds: [Int], offset: Int) throws -> Int {
-        try submit(inputIds: inputIds, offset: offset).wait()
-    }
+    let context: any KernelContext
 
-    func submit(inputIds: [Int], offset: Int) throws -> PendingForward {
-        guard !inputIds.isEmpty else { throw GemmaError.message("Empty input.") }
-        guard offset >= 0, offset + inputIds.count <= maxSeqLen else {
-            throw GemmaError.message(
-                "Token range \(offset)..<\(offset + inputIds.count) exceeds max sequence length \(maxSeqLen)."
+    /// Submits the prompt forward pass. Input ids are written to the workspace from the CPU,
+    /// and the sampled output token is written into the next ring slot on the GPU.
+    func submitPrefill(_ tokens: [Int]) throws -> PendingForward {
+        guard !tokens.isEmpty else { throw GemmaError.message("Empty input.") }
+        guard tokens.count <= maxSeqLen else {
+            throw GemmaError.message("Prompt has \(tokens.count) tokens, exceeding max sequence length \(maxSeqLen).")
+        }
+
+        writeTokenIds(tokens)
+        writePositions(count: tokens.count, offset: 0)
+
+        let idsTensor = Tensor(buffer: workspace.ids.buffer, shape: [tokens.count], dataType: .i32)
+        let positionsTensor = Tensor(buffer: workspace.positions.buffer, shape: [tokens.count], dataType: .i32)
+        let outputToken = advanceTokenRing()
+
+        let feedback = try context.submit { encoder in
+            try encodeForward(
+                tokenCount: tokens.count,
+                offset: 0,
+                idsTensor: idsTensor,
+                positionsTensor: positionsTensor,
+                outputToken: outputToken,
+                encoder: encoder
             )
         }
+        return PendingForward(feedback: feedback, nextTokenBuffer: outputToken.buffer)
+    }
 
-        writeTokenIds(inputIds)
-        writePositions(count: inputIds.count, offset: offset)
-
-        guard let commandBuffer = device.makeCommandBuffer() else {
-            throw GemmaError.message("Could not create MTL4CommandBuffer.")
+    /// Submits a single decode step. The input id is read on the GPU from the previous ring
+    /// slot's i32 token buffer, and the position is read from a separate per-step ring slot,
+    /// so the call doesn't depend on the previous CB's completion and can be enqueued ahead.
+    func submitDecodeStep(at offset: Int) throws -> PendingForward {
+        guard offset >= 0, offset < maxSeqLen else {
+            throw GemmaError.message("Decode offset \(offset) is out of range [0, \(maxSeqLen)).")
         }
-        commandBuffer.beginCommandBuffer(allocator: commandAllocator)
-        guard let compute = commandBuffer.makeComputeCommandEncoder() else {
-            throw GemmaError.message("Could not create MTL4ComputeCommandEncoder.")
+
+        let inputToken = currentTokenRingSlot()
+        let outputToken = advanceTokenRing()
+        let positionsTensor = workspace.decodePositionSlots[
+            (tokenRingIndex + workspace.decodePositionSlots.count - 1) % workspace.decodePositionSlots.count
+        ]
+        let ptr = positionsTensor.buffer.contents().bindMemory(to: Int32.self, capacity: 1)
+        ptr[0] = Int32(offset)
+
+        let feedback = try context.submit { encoder in
+            try encodeForward(
+                tokenCount: 1,
+                offset: offset,
+                idsTensor: inputToken,
+                positionsTensor: positionsTensor,
+                outputToken: outputToken,
+                encoder: encoder
+            )
         }
-        argumentTables.reset()
-
-        let encoder = HazardTrackingEncoder(
-            encoder: compute,
-            kernelLibrary: kernelLibrary,
-            argumentTables: argumentTables,
-            constants: constants
-        )
-        try encodeForward(tokenCount: inputIds.count, offset: offset, encoder: encoder)
-        compute.endEncoding()
-        commandBuffer.endCommandBuffer()
-
-        let feedback = CommitFeedbackBox()
-        let options = MTL4CommitOptions()
-        options.addFeedbackHandler { [constants] commitFeedback in
-            constants.reset()
-            feedback.finish(error: commitFeedback.error)
-        }
-        commandQueue.commit([commandBuffer], options: options)
-
-        return PendingForward(feedback: feedback, nextTokenBuffer: workspace.nextToken.buffer)
+        return PendingForward(feedback: feedback, nextTokenBuffer: outputToken.buffer)
     }
 
     // MARK: Private
 
-    private let device: MTLDevice
     private let maxSeqLen: Int
-    private let kernelLibrary: KernelLibrary
-    private let commandQueue: any MTL4CommandQueue
-    private let commandAllocator: any MTL4CommandAllocator
-    private let residencySet: any MTLResidencySet
-    private let argumentTables: ArgumentTablePool
-    private let constants: Metal4ConstantArena
+    private var tokenRingIndex = 0
 
-    private let archive: SafeTensors
     private let weights: Gemma4Weights
     private let workspace: Workspace
     private let rope: RopeTables
 
-    private func encodeForward(tokenCount t: Int, offset: Int, encoder: HazardTrackingEncoder) throws {
+    private static func makeContext(backend: KernelBackend, device: MTLDevice) throws -> any KernelContext {
+        switch backend {
+        case .metal:
+            try MetalKernelContext(
+                device: device,
+                residencyLabel: "Gemma4.residency",
+                residencyCapacity: 4096
+            )
+        case .metal4:
+            try Metal4KernelContext(
+                device: device,
+                residencyLabel: "Gemma4.residency",
+                residencyCapacity: 4096,
+                constantPageSize: 1 << 20
+            )
+        }
+    }
+
+    private static func preallocateScratch(_ context: any KernelContext, config: Gemma4Config, maxSeqLen: Int) throws {
+        let heads = config.numAttentionHeads
+        let maxHeadDim = config.globalHeadDim
+        let fdPartitions = 8
+        let br = 8
+        let bc = 64
+        let mppMaxHd = maxHeadDim <= 256 ? 256 : 512
+        let qTiles = (maxSeqLen + br - 1) / br
+
+        try context.preallocateScratch([
+            .init([1, heads, qTiles, br, bc], .f32),
+            .init([1, heads, qTiles, br, mppMaxHd], .f32)
+        ])
+        try context.preallocateScratch([
+            .init([1, heads, fdPartitions, maxHeadDim], .f32),
+            .init([1, heads, fdPartitions], .f32),
+            .init([1, heads, fdPartitions], .f32)
+        ])
+    }
+
+    private func advanceTokenRing() -> Tensor {
+        let slot = workspace.nextTokenSlots[tokenRingIndex % workspace.nextTokenSlots.count]
+        tokenRingIndex += 1
+        return slot
+    }
+
+    private func currentTokenRingSlot() -> Tensor {
+        let count = workspace.nextTokenSlots.count
+        return workspace.nextTokenSlots[(tokenRingIndex + count - 1) % count]
+    }
+
+    private func encodeForward(
+        tokenCount t: Int,
+        offset: Int,
+        idsTensor: Tensor,
+        positionsTensor: Tensor,
+        outputToken: Tensor,
+        encoder: KernelCommandEncoder
+    ) throws {
         let h0 = workspace.h0(t)
         let h1 = workspace.h1(t)
-        let ids = Tensor(buffer: workspace.ids.buffer, shape: [t], dataType: .i32)
-        let positions = Tensor(buffer: workspace.positions.buffer, shape: [t], dataType: .i32)
+        let ids = idsTensor
+        let positions = positionsTensor
 
-        try encoder.encode(Kernels.EmbeddingGather(ids: ids, table: weights.embedTokens, into: h0))
-        try encoder.encode(Kernels.ScalarMul(h0, by: Float(sqrt(Double(config.hiddenSize))), into: h1))
+        try encoder.encode {
+            try Kernels.EmbeddingGather(ids: ids, table: weights.embedTokens, into: h0)
+            try Kernels.ScalarMul(h0, by: Float(sqrt(Double(config.hiddenSize))), into: h1)
+        }
         let inputEmbeds = h1
 
         try encodePerLayerInputs(ids: ids, inputEmbeds: inputEmbeds, tokenCount: t, encoder: encoder)
@@ -149,14 +193,17 @@ final class Gemma4TextInference {
 
         let current = currentIsH1 ? workspace.h1(t) : workspace.h0(t)
         let finalNorm = workspace.normHidden(t)
-        try encoder.encode(Kernels.RMSNorm(current, weight: weights.finalNorm, into: finalNorm, eps: config.rmsNormEps))
-        try encoder.encode(Kernels.RowSlice2D(finalNorm, into: workspace.lastHidden, rowOffset: t - 1))
-        try encoder.encode(Kernels.Matmul(workspace.lastHidden, weights.embedTokens, into: workspace.logits, transposeB: true))
-        try encoder.encode(Kernels.LogitSoftcap(workspace.logits, cap: config.finalLogitSoftcap, into: workspace.cappedLogits))
-        try encoder.encode(Kernels.Argmax(workspace.cappedLogits, indices: workspace.nextToken))
+        // LogitSoftcap (tanh-based) is monotonic, so it doesn't affect argmax. Skipping it
+        // saves a 1 MB write/read of cappedLogits per decode step.
+        try encoder.encode {
+            try Kernels.RMSNorm(current, weight: weights.finalNorm, into: finalNorm, eps: config.rmsNormEps)
+            try Kernels.RowSlice2D(finalNorm, into: workspace.lastHidden, rowOffset: t - 1)
+            try Kernels.Matmul(workspace.lastHidden, weights.embedTokens, into: workspace.logits, transposeB: true)
+            try Kernels.Argmax(workspace.logits, indices: outputToken)
+        }
     }
 
-    private func encodePerLayerInputs(ids: Tensor, inputEmbeds: Tensor, tokenCount t: Int, encoder: HazardTrackingEncoder) throws {
+    private func encodePerLayerInputs(ids: Tensor, inputEmbeds: Tensor, tokenCount t: Int, encoder: KernelCommandEncoder) throws {
         let totalColumns = config.numHiddenLayers * config.hiddenSizePerLayerInput
         let pleDim = config.hiddenSizePerLayerInput
         let perLayerRows = t * config.numHiddenLayers
@@ -172,29 +219,33 @@ final class Gemma4TextInference {
         let sum = workspace.pleSum.view(shape: [t, totalColumns])
         let full = workspace.pleFull.view(shape: [t, totalColumns])
 
-        try encoder.encode(Kernels.EmbeddingGather(ids: ids, table: weights.embedTokensPerLayer, into: tokenRaw))
-        try encoder.encode(Kernels.ScalarMul(tokenRaw, by: Float(sqrt(Double(pleDim))), into: tokenScaled))
-        try encoder.encode(Kernels.Matmul(inputEmbeds, weights.perLayerModelProjection, into: contextRaw, transposeB: true))
-        try encoder.encode(Kernels.ScalarMul(contextRaw, by: Float(1 / sqrt(Double(config.hiddenSize))), into: contextScaled))
-        try encoder.encode(Kernels.RMSNorm(contextScaledPerLayer, weight: weights.perLayerProjectionNorm, into: contextNorm, eps: config.rmsNormEps))
-        try encoder.encode(Kernels.Add(tokenScaledPerLayer, contextNorm, into: sumPerLayer))
-        try encoder.encode(Kernels.ScalarMul(sum, by: Float(1 / sqrt(2.0)), into: full))
+        try encoder.encode {
+            try Kernels.EmbeddingGather(ids: ids, table: weights.embedTokensPerLayer, into: tokenRaw)
+            try Kernels.ScalarMul(tokenRaw, by: Float(sqrt(Double(pleDim))), into: tokenScaled)
+            try Kernels.Matmul(inputEmbeds, weights.perLayerModelProjection, into: contextRaw, transposeB: true)
+            try Kernels.ScalarMul(contextRaw, by: Float(1 / sqrt(Double(config.hiddenSize))), into: contextScaled)
+            try Kernels.RMSNorm(contextScaledPerLayer, weight: weights.perLayerProjectionNorm, into: contextNorm, eps: config.rmsNormEps)
+            try Kernels.Add(tokenScaledPerLayer, contextNorm, into: sumPerLayer)
+            try Kernels.ScalarMul(sum, by: Float(1 / sqrt(2.0)), into: full)
+        }
     }
 
-    private func encodeRopeTables(positions: Tensor, tokenCount t: Int, encoder: HazardTrackingEncoder) throws {
+    private func encodeRopeTables(positions: Tensor, tokenCount t: Int, encoder: KernelCommandEncoder) throws {
         let slidingCos = workspace.slidingCos.view(shape: [t, config.headDim / 2])
         let slidingSin = workspace.slidingSin.view(shape: [t, config.headDim / 2])
         let fullCos = workspace.fullCos.view(shape: [t, config.globalHeadDim / 2])
         let fullSin = workspace.fullSin.view(shape: [t, config.globalHeadDim / 2])
 
-        try encoder.encode(Kernels.RopeBuildCosSin(
-            positions: positions, invFreq: rope.slidingInvFreq,
-            cosOut: slidingCos, sinOut: slidingSin, attentionScaling: 1
-        ))
-        try encoder.encode(Kernels.RopeBuildCosSin(
-            positions: positions, invFreq: rope.fullInvFreq,
-            cosOut: fullCos, sinOut: fullSin, attentionScaling: 1
-        ))
+        try encoder.encode {
+            try Kernels.RopeBuildCosSin(
+                positions: positions, invFreq: rope.slidingInvFreq,
+                cosOut: slidingCos, sinOut: slidingSin, attentionScaling: 1
+            )
+            try Kernels.RopeBuildCosSin(
+                positions: positions, invFreq: rope.fullInvFreq,
+                cosOut: fullCos, sinOut: fullSin, attentionScaling: 1
+            )
+        }
     }
 
     private func encodeLayer(
@@ -202,7 +253,7 @@ final class Gemma4TextInference {
         tokenCount t: Int,
         offset: Int,
         currentIsH1: inout Bool,
-        encoder: HazardTrackingEncoder
+        encoder: KernelCommandEncoder
     ) throws {
         let layer = weights.layers[layerIndex]
         let layerType = config.layerTypes[layerIndex]
@@ -265,39 +316,45 @@ final class Gemma4TextInference {
         keyLen: Int,
         input: Tensor,
         output: Tensor,
-        encoder: HazardTrackingEncoder
+        encoder: KernelCommandEncoder
     ) throws {
         let qWidth = config.numAttentionHeads * headDim
         let kvWidth = config.numKeyValueHeads * headDim
 
         let normHidden = workspace.normHidden(t)
-        try encoder.encode(Kernels.RMSNorm(input, weight: layer.inputLayerNorm, into: normHidden, eps: config.rmsNormEps))
-
         let qFlat = workspace.qRaw.view(shape: [t, qWidth])
         let qHeads = workspace.qRaw.view(shape: [1, t, config.numAttentionHeads, headDim])
         let qNormed = workspace.qNorm.view(shape: [1, t, config.numAttentionHeads, headDim])
         let qRoped = workspace.qRope.view(shape: [1, t, config.numAttentionHeads, headDim])
         let qAttn = workspace.qAttn.view(shape: [1, config.numAttentionHeads, t, headDim])
-        try encoder.encode(Kernels.Matmul(normHidden, layer.qProj, into: qFlat, transposeB: true))
+
+        try encoder.encode {
+            try Kernels.RMSNorm(input, weight: layer.inputLayerNorm, into: normHidden, eps: config.rmsNormEps)
+            try Kernels.Matmul(normHidden, layer.qProj, into: qFlat, transposeB: true)
+        }
 
         let kvSourceLayer = config.kvSourceLayer(for: layerIndex)
         let ownsKVCache = kvSourceLayer == layerIndex
         if ownsKVCache {
             let kFlat = workspace.kRaw.view(shape: [t, kvWidth])
             let vFlat = workspace.vRaw.view(shape: [t, kvWidth])
-            try encoder.encode(Kernels.Matmul(normHidden, layer.kProj!, into: kFlat, transposeB: true))
-            try encoder.encode(Kernels.Matmul(normHidden, layer.vProj!, into: vFlat, transposeB: true))
+            try encoder.encode {
+                try Kernels.Matmul(normHidden, layer.kProj!, into: kFlat, transposeB: true)
+                try Kernels.Matmul(normHidden, layer.vProj!, into: vFlat, transposeB: true)
+            }
         }
 
-        try encoder.encode(Kernels.RMSNorm(qHeads, weight: layer.qNorm, into: qNormed, eps: config.rmsNormEps))
         let cos = isSliding
             ? workspace.slidingCos.view(shape: [t, headDim / 2])
             : workspace.fullCos.view(shape: [t, headDim / 2])
         let sin = isSliding
             ? workspace.slidingSin.view(shape: [t, headDim / 2])
             : workspace.fullSin.view(shape: [t, headDim / 2])
-        try encoder.encode(Kernels.RopeApply(qNormed, cos: cos, sin: sin, into: qRoped))
-        try encoder.encode(Kernels.Transpose12(qRoped, into: qAttn))
+        try encoder.encode {
+            try Kernels.RMSNorm(qHeads, weight: layer.qNorm, into: qNormed, eps: config.rmsNormEps)
+            try Kernels.RopeApply(qNormed, cos: cos, sin: sin, into: qRoped)
+            try Kernels.Transpose12(qRoped, into: qAttn)
+        }
 
         if ownsKVCache {
             let kHeads = workspace.kRaw.view(shape: [1, t, config.numKeyValueHeads, headDim])
@@ -307,42 +364,43 @@ final class Gemma4TextInference {
             let kRoped = workspace.kRope.view(shape: [1, t, config.numKeyValueHeads, headDim])
             let kAttnNew = workspace.kAttnNew.view(shape: [1, config.numKeyValueHeads, t, headDim])
             let vAttnNew = workspace.vAttnNew.view(shape: [1, config.numKeyValueHeads, t, headDim])
-            try encoder.encode(Kernels.RMSNorm(kHeads, weight: layer.kNorm!, into: kNormed, eps: config.rmsNormEps))
-
-            try encoder.encode(Kernels.RMSNorm(vHeads, weight: nil, into: vNormed, eps: config.rmsNormEps))
-            try encoder.encode(Kernels.RopeApply(kNormed, cos: cos, sin: sin, into: kRoped))
-            try encoder.encode(Kernels.Transpose12(kRoped, into: kAttnNew))
-            try encoder.encode(Kernels.Transpose12(vNormed, into: vAttnNew))
-            try encoder.encode(Kernels.KVCacheWrite(
-                source: kAttnNew,
-                cache: workspace.kCaches[layerIndex].tensor(headDim: headDim, maxSeqLen: maxSeqLen),
-                offset: offset
-            ))
-            try encoder.encode(Kernels.KVCacheWrite(
-                source: vAttnNew,
-                cache: workspace.vCaches[layerIndex].tensor(headDim: headDim, maxSeqLen: maxSeqLen),
-                offset: offset
-            ))
+            try encoder.encode {
+                try Kernels.RMSNorm(kHeads, weight: layer.kNorm!, into: kNormed, eps: config.rmsNormEps)
+                try Kernels.RMSNorm(vHeads, weight: nil, into: vNormed, eps: config.rmsNormEps)
+                try Kernels.RopeApply(kNormed, cos: cos, sin: sin, into: kRoped)
+                try Kernels.Transpose12(kRoped, into: kAttnNew)
+                try Kernels.Transpose12(vNormed, into: vAttnNew)
+                try Kernels.KVCacheWrite(
+                    source: kAttnNew,
+                    cache: workspace.kCaches[layerIndex].tensor(headDim: headDim, maxSeqLen: maxSeqLen),
+                    offset: offset
+                )
+                try Kernels.KVCacheWrite(
+                    source: vAttnNew,
+                    cache: workspace.vCaches[layerIndex].tensor(headDim: headDim, maxSeqLen: maxSeqLen),
+                    offset: offset
+                )
+            }
         }
 
         let kCache = workspace.kCaches[kvSourceLayer].prefixTensor(headDim: headDim, keyLen: keyLen)
         let vCache = workspace.vCaches[kvSourceLayer].prefixTensor(headDim: headDim, keyLen: keyLen)
-        let probs = workspace.attnProbs.view(shape: [1, config.numAttentionHeads, t, keyLen])
         let attnOut = workspace.attnOut.view(shape: [1, config.numAttentionHeads, t, headDim])
         let attnReshaped = workspace.attnOutFlat.view(shape: [1, t, config.numAttentionHeads, headDim])
         let attnFlat = workspace.attnOutFlat.view(shape: [t, qWidth])
         let attnProjected = workspace.attnProjected.view(shape: [t, config.hiddenSize])
         let attnNorm = workspace.attnNorm.view(shape: [t, config.hiddenSize])
 
-        try encoder.encode(Kernels.AttentionScoresSoftmax(
-            q: qAttn, k: kCache, into: probs,
-            scale: 1, slidingWindow: isSliding ? config.slidingWindow : nil
-        ))
-        try encoder.encode(Kernels.AttentionOutput(scores: probs, v: vCache, into: attnOut))
-        try encoder.encode(Kernels.Transpose12(attnOut, into: attnReshaped))
-        try encoder.encode(Kernels.Matmul(attnFlat, layer.oProj, into: attnProjected, transposeB: true))
-        try encoder.encode(Kernels.RMSNorm(attnProjected, weight: layer.postAttentionLayerNorm, into: attnNorm, eps: config.rmsNormEps))
-        try encoder.encode(Kernels.Add(input, attnNorm, into: output))
+        try encoder.encode {
+            try Kernels.FlashAttention(
+                q: qAttn, k: kCache, v: vCache, into: attnOut,
+                scale: 1, slidingWindow: isSliding ? config.slidingWindow : nil
+            )
+            try Kernels.Transpose12(attnOut, into: attnReshaped)
+            try Kernels.Matmul(attnFlat, layer.oProj, into: attnProjected, transposeB: true)
+            try Kernels.RMSNorm(attnProjected, weight: layer.postAttentionLayerNorm, into: attnNorm, eps: config.rmsNormEps)
+            try Kernels.Add(input, attnNorm, into: output)
+        }
     }
 
     private func encodeMLP(
@@ -350,11 +408,9 @@ final class Gemma4TextInference {
         tokenCount t: Int,
         input: Tensor,
         output: Tensor,
-        encoder: HazardTrackingEncoder
+        encoder: KernelCommandEncoder
     ) throws {
         let normHidden = workspace.normHidden(t)
-        try encoder.encode(Kernels.RMSNorm(input, weight: layer.preFeedforwardLayerNorm, into: normHidden, eps: config.rmsNormEps))
-
         let intermediate = layer.intermediateSize
         let gate = workspace.mlpGate.view(shape: [t, intermediate])
         let gateAct = workspace.mlpGateAct.view(shape: [t, intermediate])
@@ -363,13 +419,16 @@ final class Gemma4TextInference {
         let down = workspace.mlpDown.view(shape: [t, config.hiddenSize])
         let ffnNorm = workspace.ffnNorm.view(shape: [t, config.hiddenSize])
 
-        try encoder.encode(Kernels.Matmul(normHidden, layer.gateProj, into: gate, transposeB: true))
-        try encoder.encode(Kernels.Matmul(normHidden, layer.upProj, into: up, transposeB: true))
-        try encoder.encode(Kernels.GeluTanh(gate, into: gateAct))
-        try encoder.encode(Kernels.Mul(gateAct, up, into: gated))
-        try encoder.encode(Kernels.Matmul(gated, layer.downProj, into: down, transposeB: true))
-        try encoder.encode(Kernels.RMSNorm(down, weight: layer.postFeedforwardLayerNorm, into: ffnNorm, eps: config.rmsNormEps))
-        try encoder.encode(Kernels.Add(input, ffnNorm, into: output))
+        try encoder.encode {
+            try Kernels.RMSNorm(input, weight: layer.preFeedforwardLayerNorm, into: normHidden, eps: config.rmsNormEps)
+            try Kernels.Matmul(normHidden, layer.gateProj, into: gate, transposeB: true)
+            try Kernels.Matmul(normHidden, layer.upProj, into: up, transposeB: true)
+            try Kernels.GeluTanh(gate, into: gateAct)
+            try Kernels.Mul(gateAct, up, into: gated)
+            try Kernels.Matmul(gated, layer.downProj, into: down, transposeB: true)
+            try Kernels.RMSNorm(down, weight: layer.postFeedforwardLayerNorm, into: ffnNorm, eps: config.rmsNormEps)
+            try Kernels.Add(input, ffnNorm, into: output)
+        }
     }
 
     private func encodePerLayerInputResidual(
@@ -378,7 +437,7 @@ final class Gemma4TextInference {
         tokenCount t: Int,
         input: Tensor,
         output: Tensor,
-        encoder: HazardTrackingEncoder
+        encoder: KernelCommandEncoder
     ) throws {
         let pleDim = config.hiddenSizePerLayerInput
         let pleLayer = workspace.pleLayer.view(shape: [t, pleDim])
@@ -389,13 +448,15 @@ final class Gemma4TextInference {
         let pleNorm = workspace.pleNorm.view(shape: [t, config.hiddenSize])
         let pleFull = workspace.pleFull.view(shape: [t, config.numHiddenLayers * pleDim])
 
-        try encoder.encode(Kernels.Slice2D(pleFull, into: pleLayer, columnOffset: layerIndex * pleDim))
-        try encoder.encode(Kernels.Matmul(input, layer.perLayerInputGate, into: pleGate, transposeB: true))
-        try encoder.encode(Kernels.GeluTanh(pleGate, into: pleGateAct))
-        try encoder.encode(Kernels.Mul(pleGateAct, pleLayer, into: pleGated))
-        try encoder.encode(Kernels.Matmul(pleGated, layer.perLayerProjection, into: pleProjected, transposeB: true))
-        try encoder.encode(Kernels.RMSNorm(pleProjected, weight: layer.postPerLayerInputNorm, into: pleNorm, eps: config.rmsNormEps))
-        try encoder.encode(Kernels.Add(input, pleNorm, into: output))
+        try encoder.encode {
+            try Kernels.Slice2D(pleFull, into: pleLayer, columnOffset: layerIndex * pleDim)
+            try Kernels.Matmul(input, layer.perLayerInputGate, into: pleGate, transposeB: true)
+            try Kernels.GeluTanh(pleGate, into: pleGateAct)
+            try Kernels.Mul(pleGateAct, pleLayer, into: pleGated)
+            try Kernels.Matmul(pleGated, layer.perLayerProjection, into: pleProjected, transposeB: true)
+            try Kernels.RMSNorm(pleProjected, weight: layer.postPerLayerInputNorm, into: pleNorm, eps: config.rmsNormEps)
+            try Kernels.Add(input, pleNorm, into: output)
+        }
     }
 
     private func writeTokenIds(_ inputIds: [Int]) {

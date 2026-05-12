@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct RowSlice2D: Kernel {
+    struct RowSlice2D: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

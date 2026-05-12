@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct BroadcastAdd: Kernel {
+    struct BroadcastAdd: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

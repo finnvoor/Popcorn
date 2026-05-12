@@ -1,37 +1,20 @@
-import Metal
-
-// MARK: - Metal4Constants
-
-@available(macOS 26.0, iOS 26.0, *) public protocol Metal4Constants: AnyObject {
-    func append(_ bytes: UnsafeRawBufferPointer, alignment: Int) throws -> MTLGPUAddress
-}
-
-@available(macOS 26.0, iOS 26.0, *) public extension Metal4Constants {
-    func append<T: BitwiseCopyable>(_ value: T) throws -> MTLGPUAddress {
-        try withUnsafeBytes(of: value) { bytes in
-            try append(bytes, alignment: MemoryLayout<T>.alignment)
-        }
-    }
-}
+@preconcurrency import Metal
+import Popcorn
 
 // MARK: - Metal4ConstantArena
 
-@available(macOS 26.0, iOS 26.0, *) public final class Metal4ConstantArena: Metal4Constants, @unchecked Sendable {
+@available(macOS 26.0, iOS 26.0, *) final class Metal4ConstantArena: @unchecked Sendable {
     // MARK: Lifecycle
 
-    public init(
-        device: MTLDevice,
-        residencySet: (any MTLResidencySet)? = nil,
-        pageSize: Int = 64 * 1024
-    ) {
+    init(device: MTLDevice, residencySet: (any MTLResidencySet)? = nil, pageSize: Int = 64 * 1024) {
         self.device = device
         self.residencySet = residencySet
         self.pageSize = pageSize
     }
 
-    // MARK: Public
+    // MARK: Internal
 
-    public func append(_ bytes: UnsafeRawBufferPointer, alignment: Int) throws -> MTLGPUAddress {
+    func append(_ bytes: UnsafeRawBufferPointer, alignment: Int) throws -> MTLGPUAddress {
         let byteCount = max(bytes.count, 1)
         let alignment = max(alignment, Self.minimumAlignment)
 
@@ -59,12 +42,18 @@ import Metal
         }
     }
 
-    public func reset() {
+    func append<T: BitwiseCopyable>(_ value: T) throws -> MTLGPUAddress {
+        try withUnsafeBytes(of: value) { bytes in
+            try append(bytes, alignment: MemoryLayout<T>.alignment)
+        }
+    }
+
+    func reset() {
         pageIndex = 0
         offset = 0
     }
 
-    public func preallocate(pageCount: Int) throws {
+    func preallocate(pageCount: Int) throws {
         while pages.count < pageCount {
             try allocatePage(minLength: 0)
         }
@@ -88,13 +77,10 @@ import Metal
 
     private func allocatePage(minLength: Int) throws {
         let length = max(pageSize, minLength)
-        guard let buffer = device.makeBuffer(
-            length: length,
-            options: [.storageModeShared, .cpuCacheModeWriteCombined]
-        ) else {
+        guard let buffer = device.makeBuffer(length: length, options: [.storageModeShared, .cpuCacheModeWriteCombined]) else {
             throw PopcornError.constantAllocationFailed(byteCount: length)
         }
-        buffer.label = "Popcorn.constants.\(length)"
+        buffer.label = "gemma.constants.\(length)"
         pages.append(buffer)
         residencySet?.addAllocation(buffer)
     }

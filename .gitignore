@@ -2,9 +2,14 @@
 /.build
 Examples/*/.build/
 Examples/*/Package.resolved
+Benchmarks/.build/
+Benchmarks/Package.resolved
 /Packages
 xcuserdata/
 DerivedData/
 .swiftpm/configuration/registries.json
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
+*.gputrace
+*.trace
+*.profile.jsonl

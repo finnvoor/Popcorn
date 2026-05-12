@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct Gather: Kernel {
+    struct Gather: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

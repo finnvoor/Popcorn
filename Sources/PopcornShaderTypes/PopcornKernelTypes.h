@@ -117,6 +117,47 @@ typedef struct {
 
 typedef struct {
     uint32_t B;
+    uint32_t Nq;
+    uint32_t Nkv;
+    uint32_t Sq;
+    uint32_t Sk;
+    uint32_t Hd;
+    int32_t  slidingWindow;
+    float    scale;
+} FlashAttentionConstants;
+
+typedef struct {
+    uint32_t B;
+    uint32_t Nq;
+    uint32_t Nkv;
+    uint32_t Sq;
+    uint32_t Sk;
+    uint32_t Hd;
+    uint32_t qTilesPerHead;
+    int32_t  slidingWindow;
+    float    scale;
+} MPPFlashAttentionConstants;
+
+typedef struct {
+    uint32_t B;
+    uint32_t Nq;
+    uint32_t Nkv;
+    uint32_t Sk;
+    uint32_t Hd;
+    uint32_t P;            // number of KV partitions per (b, hq)
+    int32_t  slidingWindow;
+    float    scale;
+} FlashDecodingPartialConstants;
+
+typedef struct {
+    uint32_t B;
+    uint32_t Nq;
+    uint32_t Hd;
+    uint32_t P;
+} FlashDecodingReduceConstants;
+
+typedef struct {
+    uint32_t B;
     uint32_t Nkv;
     uint32_t Snew;
     uint32_t Smax;

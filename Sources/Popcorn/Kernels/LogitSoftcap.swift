@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct LogitSoftcap: Kernel {
+    struct LogitSoftcap: DispatchKernel {
         // MARK: Lifecycle
 
         public init(x: Tensor, out: Tensor, count: Int, cap: Float) throws {

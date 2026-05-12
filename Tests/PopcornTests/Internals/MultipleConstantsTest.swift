@@ -12,7 +12,7 @@ private struct FlagParams { var scale: Float }
 
 // MARK: - DummyKernel
 
-private struct DummyKernel: Kernel {
+private struct DummyKernel: DispatchKernel {
     let buffer: MTLBuffer
     let shape: ShapeParams
     let flags: FlagParams

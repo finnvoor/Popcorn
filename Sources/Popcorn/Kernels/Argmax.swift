@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct Argmax: Kernel {
+    struct Argmax: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

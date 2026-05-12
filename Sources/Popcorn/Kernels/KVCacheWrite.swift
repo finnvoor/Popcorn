@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct KVCacheWrite: Kernel {
+    struct KVCacheWrite: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

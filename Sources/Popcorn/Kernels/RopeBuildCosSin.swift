@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct RopeBuildCosSin: Kernel {
+    struct RopeBuildCosSin: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

@@ -15,6 +15,8 @@ public final class KernelLibrary {
 
     // MARK: Public
 
+    public let device: MTLDevice
+
     public func pipelineState(for functionName: String) throws -> MTLComputePipelineState {
         lock.lock()
         defer { lock.unlock() }
@@ -40,16 +42,38 @@ public final class KernelLibrary {
 
     // MARK: Internal
 
-    let device: MTLDevice
-
     static func mppSource(bundle: Bundle) throws -> String {
-        let urls = ["MPPMatmul", "MPPMatvec"].compactMap {
+        let names = ["MPPMatmul", "MPPMatvec", "MPPFlashAttention"]
+        let urls = names.compactMap {
             bundle.url(forResource: $0, withExtension: "metal", subdirectory: "Metal4")
         }
-        guard urls.count == 2 else {
+        guard urls.count == names.count else {
             throw PopcornError.kernelFunctionNotFound("mpp_*")
         }
-        return try urls.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+        guard let headerURL = bundle.url(forResource: "PopcornKernelTypes", withExtension: "h") else {
+            throw PopcornError.kernelFunctionNotFound("PopcornKernelTypes.h")
+        }
+        let header = try String(contentsOf: headerURL, encoding: .utf8)
+        let mppFlashAttentionConstants = try Self.sharedType(
+            named: "MPPFlashAttentionConstants",
+            in: header
+        )
+        return try zip(names, urls).map { name, url in
+            let source = try String(contentsOf: url, encoding: .utf8)
+            return name == "MPPFlashAttention" ? mppFlashAttentionConstants + "\n" + source : source
+        }.joined(separator: "\n")
+    }
+
+    static func sharedType(named name: String, in header: String) throws -> String {
+        let marker = "} \(name);"
+        guard let end = header.range(of: marker)?.upperBound else {
+            throw PopcornError.kernelFunctionNotFound(name)
+        }
+        let prefix = header[..<end]
+        guard let start = prefix.range(of: "typedef struct", options: .backwards)?.lowerBound else {
+            throw PopcornError.kernelFunctionNotFound(name)
+        }
+        return String(header[start..<end])
     }
 
     // MARK: Private
@@ -62,7 +86,7 @@ public final class KernelLibrary {
 
     private func mppLibrary() throws -> MTLLibrary {
         if let _mppLibrary { return _mppLibrary }
-        guard #available(macOS 26.0, *) else {
+        guard #available(macOS 26.0, iOS 26.0, *), device.supportsMPP else {
             throw PopcornError.kernelFunctionNotFound("mpp_*")
         }
         let source = try Self.mppSource(bundle: .module)

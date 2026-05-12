@@ -3,7 +3,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct Matmul: Kernel {
+    struct Matmul: DispatchKernel {
         // MARK: Lifecycle
 
         public init(
@@ -293,9 +293,7 @@ public extension Kernels {
             _ device: any MTLDevice,
             dataTypes: (Tensor.DataType, Tensor.DataType, Tensor.DataType)
         ) -> Bool {
-            guard dataTypesSupportedByMPP(dataTypes.0, dataTypes.1, dataTypes.2) else { return false }
-            guard #available(macOS 26.0, iOS 26.0, *) else { return false }
-            return device.supportsFamily(.metal4)
+            device.supportsMPP && dataTypesSupportedByMPP(dataTypes.0, dataTypes.1, dataTypes.2)
         }
     }
 }

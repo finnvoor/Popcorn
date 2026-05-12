@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct Transpose12: Kernel {
+    struct Transpose12: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

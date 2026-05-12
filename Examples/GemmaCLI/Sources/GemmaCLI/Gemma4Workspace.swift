@@ -28,7 +28,6 @@ final class Workspace {
         kAttnNew = try device.makeTensor(shape: [1, config.numKeyValueHeads, maxSeqLen, config.globalHeadDim], dataType: .bf16, label: "kAttnNew")
         vAttnNew = try device.makeTensor(shape: [1, config.numKeyValueHeads, maxSeqLen, config.globalHeadDim], dataType: .bf16, label: "vAttnNew")
 
-        attnProbs = try device.makeTensor(shape: [1, config.numAttentionHeads, maxSeqLen, maxSeqLen], dataType: .f32, label: "attnProbs")
         attnOut = try device.makeTensor(shape: [1, config.numAttentionHeads, maxSeqLen, config.globalHeadDim], dataType: .bf16, label: "attnOut")
         attnOutFlat = try device.makeTensor(shape: [maxSeqLen, maxQ], dataType: .bf16, label: "attnOutFlat")
         attnProjected = try device.makeTensor(shape: [maxSeqLen, config.hiddenSize], dataType: .bf16, label: "attnProjected")
@@ -65,7 +64,12 @@ final class Workspace {
         lastHidden = try device.makeTensor(shape: [1, config.hiddenSize], dataType: .bf16, label: "lastHidden")
         logits = try device.makeTensor(shape: [1, config.vocabSize], dataType: .f32, label: "logits")
         cappedLogits = try device.makeTensor(shape: [1, config.vocabSize], dataType: .f32, label: "cappedLogits")
-        nextToken = try device.makeTensor(shape: [1], dataType: .i32, label: "nextToken")
+        nextTokenSlots = try (0..<Workspace.tokenRingCapacity).map { i in
+            try device.makeTensor(shape: [1], dataType: .i32, label: "nextTokenSlot.\(i)")
+        }
+        decodePositionSlots = try (0..<Workspace.tokenRingCapacity).map { i in
+            try device.makeTensor(shape: [1], dataType: .i32, label: "decodePositionSlot.\(i)")
+        }
 
         kCaches = try (0..<config.numHiddenLayers).map { i in
             let headDim = config.layerTypes[i] == .sliding ? config.headDim : config.globalHeadDim
@@ -79,6 +83,8 @@ final class Workspace {
 
     // MARK: Internal
 
+    static let tokenRingCapacity = 4
+
     let ids: Tensor
     let positions: Tensor
 
@@ -91,7 +97,6 @@ final class Workspace {
     let qNorm: Tensor; let kNorm: Tensor; let vNorm: Tensor
     let qRope: Tensor; let kRope: Tensor
     let qAttn: Tensor; let kAttnNew: Tensor; let vAttnNew: Tensor
-    let attnProbs: Tensor
     let attnOut: Tensor
     let attnOutFlat: Tensor
     let attnProjected: Tensor
@@ -112,8 +117,10 @@ final class Workspace {
 
     let lastHidden: Tensor
     let logits: Tensor
+
     let cappedLogits: Tensor
-    let nextToken: Tensor
+    let nextTokenSlots: [Tensor]
+    let decodePositionSlots: [Tensor]
 
     let kCaches: [CacheTensor]
     let vCaches: [CacheTensor]
@@ -124,15 +131,17 @@ final class Workspace {
             qRaw.buffer, kRaw.buffer, vRaw.buffer,
             qNorm.buffer, kNorm.buffer, vNorm.buffer,
             qRope.buffer, kRope.buffer, qAttn.buffer, kAttnNew.buffer, vAttnNew.buffer,
-            attnProbs.buffer, attnOut.buffer, attnOutFlat.buffer, attnProjected.buffer, attnNorm.buffer,
+            attnOut.buffer, attnOutFlat.buffer, attnProjected.buffer, attnNorm.buffer,
             mlpGate.buffer, mlpGateAct.buffer, mlpUp.buffer, mlpGated.buffer, mlpDown.buffer, ffnNorm.buffer,
             pleToken.buffer, pleTokenScaled.buffer, pleContext.buffer, pleContextScaled.buffer,
             pleContextNorm.buffer, pleSum.buffer, pleFull.buffer,
             pleLayer.buffer, pleGate.buffer, pleGateAct.buffer, pleGated.buffer,
             pleProjected.buffer, pleNorm.buffer,
             slidingCos.buffer, slidingSin.buffer, fullCos.buffer, fullSin.buffer,
-            lastHidden.buffer, logits.buffer, cappedLogits.buffer, nextToken.buffer
+            lastHidden.buffer, logits.buffer, cappedLogits.buffer
         ]
+        buffers.append(contentsOf: nextTokenSlots.map(\.buffer))
+        buffers.append(contentsOf: decodePositionSlots.map(\.buffer))
         for cache in kCaches {
             buffers.append(cache.storage.buffer)
         }

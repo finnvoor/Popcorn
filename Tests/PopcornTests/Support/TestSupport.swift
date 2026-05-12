@@ -9,6 +9,29 @@ enum TestSupportError: Error {
     case bufferAllocationFailed
 }
 
+// MARK: - TestScratchAllocator
+
+final class TestScratchAllocator: KernelScratchAllocator {
+    // MARK: Lifecycle
+
+    init(device: MTLDevice) {
+        self.device = device
+    }
+
+    // MARK: Internal
+
+    func borrowTemporaryBuffer(length: Int) throws -> KernelTemporaryBuffer {
+        guard let buffer = device.makeBuffer(length: max(1, length), options: [.storageModePrivate]) else {
+            throw PopcornError.tensorAllocationFailed(byteCount: length)
+        }
+        return KernelTemporaryBuffer(buffer: buffer)
+    }
+
+    // MARK: Private
+
+    private let device: MTLDevice
+}
+
 // MARK: - Inputs
 
 let inputA: [Float] = [0, 1, -2.5, 3.25, 100, -8, 0.5, 42]

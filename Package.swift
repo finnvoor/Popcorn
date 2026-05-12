@@ -17,7 +17,8 @@ let package = Package(
             name: "Popcorn",
             dependencies: ["PopcornShaderTypes"],
             resources: [
-                .copy("Kernels/Metal4")
+                .copy("Kernels/Metal4"),
+                .copy("../PopcornShaderTypes/PopcornKernelTypes.h")
             ]
         ),
         .testTarget(name: "PopcornTests", dependencies: ["Popcorn", "PopcornShaderTypes"])

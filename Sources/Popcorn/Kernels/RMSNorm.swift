@@ -4,7 +4,7 @@ import PopcornShaderTypes
 // MARK: - Kernels.RMSNorm
 
 public extension Kernels {
-    struct RMSNorm: Kernel {
+    struct RMSNorm: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

@@ -4,7 +4,7 @@ import PopcornShaderTypes
 // MARK: - Kernels.Softmax
 
 public extension Kernels {
-    struct Softmax: Kernel {
+    struct Softmax: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

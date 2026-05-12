@@ -4,7 +4,7 @@ import PopcornShaderTypes
 // MARK: - Kernels.AttentionScoresSoftmax
 
 public extension Kernels {
-    struct AttentionScoresSoftmax: Kernel {
+    struct AttentionScoresSoftmax: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

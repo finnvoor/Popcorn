@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct ScalarMul: Kernel {
+    struct ScalarMul: DispatchKernel {
         // MARK: Lifecycle
 
         public init(x: Tensor, out: Tensor, scalar: Float, count: Int) throws {

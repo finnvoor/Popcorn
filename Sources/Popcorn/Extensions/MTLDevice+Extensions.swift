@@ -1,6 +1,16 @@
 import Metal
 
 public extension MTLDevice {
+    /// Whether this device can run Popcorn's Metal Performance Primitives kernels.
+    ///
+    /// MPP kernels are written in MSL 4.0 and require runtime tensor support, both of
+    /// which are gated on `MTLGPUFamilyMetal4`. On unsupported devices Popcorn falls
+    /// back to its hand-written kernels.
+    var supportsMPP: Bool {
+        guard #available(macOS 26.0, iOS 26.0, *) else { return false }
+        return supportsFamily(.metal4)
+    }
+
     func makeTensor(
         shape: Tensor.Shape,
         dataType: Tensor.DataType = .f32,

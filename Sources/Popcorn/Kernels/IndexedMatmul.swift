@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct IndexedMatmul: Kernel {
+    struct IndexedMatmul: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

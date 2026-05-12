@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct AttentionScores: Kernel {
+    struct AttentionScores: DispatchKernel {
         // MARK: Lifecycle
 
         public init(

@@ -2,7 +2,7 @@ import Metal
 import PopcornShaderTypes
 
 public extension Kernels {
-    struct WeightedSum: Kernel {
+    struct WeightedSum: DispatchKernel {
         // MARK: Lifecycle
 
         public init(
