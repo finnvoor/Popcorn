@@ -10,8 +10,16 @@ kernel void scalar_mul_typed(
     constant ScalarMulConstants& p [[ buffer(2) ]],
     uint id [[ thread_position_in_grid ]]
 ) {
-    if (id >= p.count) return;
-    popcorn_store(out, id, popcorn_load(x, id) * p.scalar);
+    uint base = id * 4u;
+    if (base >= p.count) return;
+    if (base + 4u <= p.count) {
+        float4 v = popcorn_load4(x, id);
+        popcorn_store4(out, id, v * p.scalar);
+    } else {
+        for (uint i = base; i < p.count; ++i) {
+            popcorn_store(out, i, popcorn_load(x, i) * p.scalar);
+        }
+    }
 }
 
 POPCORN_INSTANTIATE_KERNEL("scalar_mul", scalar_mul_typed, float)

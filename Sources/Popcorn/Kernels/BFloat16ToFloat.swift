@@ -9,7 +9,7 @@ public extension Kernels {
             self.input = input
             self.output = output
             constants = [BFloat16ToFloatConstants(count: UInt32(count))]
-            dispatchGrid = MTLSize(width: count, height: 1, depth: 1)
+            dispatchGrid = MTLSize(width: (count + 3) / 4, height: 1, depth: 1)
         }
 
         public init(_ input: Tensor, into output: Tensor) throws {

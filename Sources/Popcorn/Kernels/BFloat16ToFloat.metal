@@ -8,7 +8,15 @@ kernel void bfloat16_to_float(
     constant BFloat16ToFloatConstants& p [[ buffer(2) ]],
     uint id [[ thread_position_in_grid ]]
 ) {
-    if (id >= p.count) return;
-    uint bits = uint(in[id]) << 16;
-    out[id] = as_type<float>(bits);
+    uint base = id * 4u;
+    if (base >= p.count) return;
+    if (base + 4u <= p.count) {
+        ushort4 s = ((device const ushort4*)in)[id];
+        float4 v = as_type<float4>(uint4(s) << 16);
+        ((device float4*)out)[id] = v;
+    } else {
+        for (uint i = base; i < p.count; ++i) {
+            out[i] = as_type<float>(uint(in[i]) << 16);
+        }
+    }
 }

@@ -34,8 +34,10 @@ public extension Kernels {
                 Nh: UInt32(headCount),
                 Hd2: UInt32(headDim / 2)
             )]
+            let hd2 = headDim / 2
+            let hd2_4 = (hd2 + 3) / 4
             dispatchGrid = MTLSize(
-                width: batch * seqLen * headCount * (headDim / 2),
+                width: batch * seqLen * headCount * hd2_4,
                 height: 1,
                 depth: 1
             )

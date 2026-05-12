@@ -11,8 +11,17 @@ kernel void mul_typed(
     constant MulConstants& p [[ buffer(3) ]],
     uint id [[ thread_position_in_grid ]]
 ) {
-    if (id >= p.count) return;
-    popcorn_store(out, id, popcorn_load(a, id) * popcorn_load(b, id));
+    uint base = id * 4u;
+    if (base >= p.count) return;
+    if (base + 4u <= p.count) {
+        float4 va = popcorn_load4(a, id);
+        float4 vb = popcorn_load4(b, id);
+        popcorn_store4(out, id, va * vb);
+    } else {
+        for (uint i = base; i < p.count; ++i) {
+            popcorn_store(out, i, popcorn_load(a, i) * popcorn_load(b, i));
+        }
+    }
 }
 
 POPCORN_INSTANTIATE_KERNEL("mul", mul_typed, float)

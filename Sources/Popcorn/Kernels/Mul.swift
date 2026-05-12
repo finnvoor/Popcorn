@@ -16,7 +16,7 @@ public extension Kernels {
             default: throw PopcornError.unsupportedDataTypeCombination("Unsupported mul data type: \(a.dataType).")
             }
             constants = [MulConstants(count: UInt32(count))]
-            dispatchGrid = MTLSize(width: count, height: 1, depth: 1)
+            dispatchGrid = MTLSize(width: (count + 3) / 4, height: 1, depth: 1)
         }
 
         public init(_ a: Tensor, _ b: Tensor, into out: Tensor) throws {

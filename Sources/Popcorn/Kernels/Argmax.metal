@@ -8,8 +8,6 @@ static inline bool argmax_is_better(float candidateV, int candidateI, float best
     return candidateV > bestV || (candidateV == bestV && candidateI < bestI);
 }
 
-// Single-threaded argmax. This is still the best path when there are enough
-// small rows to fill the GPU without paying per-row reduction overhead.
 kernel void argmax(
     device const float* x       [[ buffer(0) ]],
     device int*         indices [[ buffer(1) ]],
@@ -28,10 +26,6 @@ kernel void argmax(
     indices[row] = bestI;
 }
 
-// Parallel argmax: one threadgroup per row. Threads stripe across N, reduce
-// within each simdgroup, then reduce the simdgroup winners through threadgroup
-// memory. The host selects the threadgroup width from the device limit, N, and
-// row count so this kernel scales from small batches to large vocabularies.
 kernel void argmax_row(
     device const float* x       [[ buffer(0) ]],
     device int*         indices [[ buffer(1) ]],

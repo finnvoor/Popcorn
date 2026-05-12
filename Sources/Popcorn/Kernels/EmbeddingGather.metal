@@ -12,10 +12,21 @@ kernel void embedding_gather_typed(
     uint2 tid [[ thread_position_in_grid ]]
 ) {
     uint n = tid.x;
-    uint h = tid.y;
-    if (n >= p.N || h >= p.H) return;
+    uint hBase = tid.y * 4u;
+    if (n >= p.N || hBase >= p.H) return;
     uint row = uint(ids[n]);
-    popcorn_store(out, n * p.H + h, popcorn_load(table, row * p.H + h));
+
+    uint srcRow = row * p.H;
+    uint dstRow = n * p.H;
+    if (hBase + 4u <= p.H && (p.H & 3u) == 0u) {
+        float4 v = popcorn_load4(table, (srcRow + hBase) >> 2);
+        popcorn_store4(out, (dstRow + hBase) >> 2, v);
+    } else {
+        uint limit = min(hBase + 4u, p.H);
+        for (uint h = hBase; h < limit; ++h) {
+            popcorn_store(out, dstRow + h, popcorn_load(table, srcRow + h));
+        }
+    }
 }
 
 POPCORN_INSTANTIATE_KERNEL("embedding_gather", embedding_gather_typed, float, float, EmbeddingGatherConstants)

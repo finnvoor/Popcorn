@@ -15,7 +15,7 @@ public extension Kernels {
             default: throw PopcornError.unsupportedDataTypeCombination("Unsupported gelu tanh data type: \(x.dataType).")
             }
             constants = [GeluTanhConstants(count: UInt32(count))]
-            dispatchGrid = MTLSize(width: count, height: 1, depth: 1)
+            dispatchGrid = MTLSize(width: (count + 3) / 4, height: 1, depth: 1)
         }
 
         public init(_ x: Tensor, into out: Tensor) throws {

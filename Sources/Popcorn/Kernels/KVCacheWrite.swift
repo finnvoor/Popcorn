@@ -31,7 +31,8 @@ public extension Kernels {
                 Hd: UInt32(headDim),
                 offset: UInt32(offset)
             )]
-            dispatchGrid = MTLSize(width: batch * kvHeads * newLen * headDim, height: 1, depth: 1)
+            let total = batch * kvHeads * newLen * headDim
+            dispatchGrid = MTLSize(width: (total + 3) / 4, height: 1, depth: 1)
         }
 
         public init(source: Tensor, cache: Tensor, offset: Int) throws {

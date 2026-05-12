@@ -1,4 +1,5 @@
 import Metal
+import PopcornShaderTypes
 
 public extension Kernels {
     struct Add: Kernel {
@@ -20,6 +21,7 @@ public extension Kernels {
             case .bf16: "add_bf16"
             default: throw PopcornError.unsupportedDataTypeCombination("Unsupported add data type: \(a.dataType).")
             }
+            constants = [AddConstants(count: UInt32(count))]
         }
 
         public init(_ a: Tensor, _ b: Tensor, into out: Tensor) throws {
@@ -35,6 +37,7 @@ public extension Kernels {
         // MARK: Public
 
         public let functionName: String
+        public let constants: [any BitwiseCopyable]
 
         public var tensors: [Tensor.Binding] {
             [
@@ -46,7 +49,7 @@ public extension Kernels {
 
         public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
             (
-                MTLSize(width: count, height: 1, depth: 1),
+                MTLSize(width: (count + 3) / 4, height: 1, depth: 1),
                 MTLSize(width: 256, height: 1, depth: 1)
             )
         }

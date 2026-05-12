@@ -23,7 +23,7 @@ public extension Kernels {
             default: throw PopcornError.unsupportedDataTypeCombination("Unsupported embedding gather data type combination: \(table.dataType), \(out.dataType).")
             }
             constants = [EmbeddingGatherConstants(N: UInt32(tokenCount), H: UInt32(hiddenSize))]
-            dispatchGrid = MTLSize(width: tokenCount, height: hiddenSize, depth: 1)
+            dispatchGrid = MTLSize(width: tokenCount, height: (hiddenSize + 3) / 4, depth: 1)
         }
 
         public init(ids: Tensor, table: Tensor, into out: Tensor) throws {

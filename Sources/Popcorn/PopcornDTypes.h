@@ -37,6 +37,21 @@ inline void popcorn_store(device float* p, uint i, float x) { p[i] = x; }
 inline void popcorn_store(device half* p, uint i, float x) { p[i] = half(x); }
 inline void popcorn_store(device ushort* p, uint i, float x) { p[i] = popcorn_float_to_bf16(x); }
 
+inline void popcorn_store4(device float* p, uint i4, float4 v) {
+    ((device float4*)p)[i4] = v;
+}
+inline void popcorn_store4(device half* p, uint i4, float4 v) {
+    ((device half4*)p)[i4] = half4(v);
+}
+inline void popcorn_store4(device ushort* p, uint i4, float4 v) {
+    ushort4 r;
+    r.x = popcorn_float_to_bf16(v.x);
+    r.y = popcorn_float_to_bf16(v.y);
+    r.z = popcorn_float_to_bf16(v.z);
+    r.w = popcorn_float_to_bf16(v.w);
+    ((device ushort4*)p)[i4] = r;
+}
+
 template <uint bits>
 inline int popcorn_load_packed_signed(device const uchar* p, uint i) {
     constexpr uint mask = (1u << bits) - 1u;

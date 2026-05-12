@@ -15,14 +15,19 @@ public extension Kernels {
             self.a = a
             self.b = b
             self.out = out
-            functionName = switch (a.dataType, b.dataType, out.dataType) {
-            case (.f32, .f32, .f32): "broadcast_add"
-            case (.bf16, .bf16, .bf16): "broadcast_add_bf16"
-            case (.bf16, .f32, .f32): "broadcast_add_bf16_f32_to_f32"
+            let canVec4 = count.isMultiple(of: 4) && bCount.isMultiple(of: 4)
+            functionName = switch (a.dataType, b.dataType, out.dataType, canVec4) {
+            case (.f32, .f32, .f32, true): "broadcast_add_vec4"
+            case (.bf16, .bf16, .bf16, true): "broadcast_add_vec4_bf16"
+            case (.bf16, .f32, .f32, true): "broadcast_add_vec4_bf16_f32_to_f32"
+            case (.f32, .f32, .f32, false): "broadcast_add"
+            case (.bf16, .bf16, .bf16, false): "broadcast_add_bf16"
+            case (.bf16, .f32, .f32, false): "broadcast_add_bf16_f32_to_f32"
             default: throw PopcornError.unsupportedDataTypeCombination("Unsupported broadcast add data type combination: \(a.dataType), \(b.dataType), \(out.dataType).")
             }
             constants = [BroadcastAddConstants(count: UInt32(count), bCount: UInt32(bCount))]
-            dispatchGrid = MTLSize(width: count, height: 1, depth: 1)
+            let threads = canVec4 ? count / 4 : count
+            dispatchGrid = MTLSize(width: threads, height: 1, depth: 1)
         }
 
         public init(_ a: Tensor, _ b: Tensor, into out: Tensor) throws {
