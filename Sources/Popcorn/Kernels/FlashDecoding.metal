@@ -94,8 +94,9 @@ kernel void flash_decoding_partial_typed(
             if (i >= Bc_actual) break;
             uint k = jStart + i;
             int posK = int(k);
-            bool allowed = posK <= posQ;
-            if (p.slidingWindow >= 0) allowed = allowed && ((posQ - posK) < p.slidingWindow);
+            // maskKind: 0 = causal, 1 = causal + sliding window, 2 = bidirectional.
+            bool allowed = (p.maskKind == 2u) || (posK <= posQ);
+            if (p.maskKind == 1u) allowed = allowed && ((posQ - posK) < p.slidingWindow);
 
             float acc = -INFINITY;
             if (allowed) {

@@ -394,7 +394,8 @@ final class Gemma4TextInference {
         try encoder.encode {
             try Kernels.FlashAttention(
                 q: qAttn, k: kCache, v: vCache, into: attnOut,
-                scale: 1, slidingWindow: isSliding ? config.slidingWindow : nil
+                scale: 1,
+                mask: isSliding ? .causalSlidingWindow(window: config.slidingWindow) : .causal
             )
             try Kernels.Transpose12(attnOut, into: attnReshaped)
             try Kernels.Matmul(attnFlat, layer.oProj, into: attnProjected, transposeB: true)

@@ -74,7 +74,7 @@ kernel void flash_attention_typed(
     for (uint jStart = 0; jStart < Sk; jStart += kFA_Bc) {
         uint Bc_actual = min(kFA_Bc, Sk - jStart);
 
-        // 1. S[i] = Q . K[jStart + i] (with causal/sliding mask).
+        // 1. S[i] = Q . K[jStart + i] (with mask).
         //    sgid = which K row inside this 4-row inner step.
         //    lane = which slice of the Hd dot product.
         for (uint sub = 0; sub < kFA_Bc; sub += kFA_SimdgroupCount) {
@@ -82,8 +82,9 @@ kernel void flash_attention_typed(
             if (i >= Bc_actual) break;
             uint k = jStart + i;
             int posK = int(k);
-            bool allowed = posK <= posQ;
-            if (p.slidingWindow >= 0) allowed = allowed && ((posQ - posK) < p.slidingWindow);
+            // maskKind: 0 = causal, 1 = causal + sliding window, 2 = bidirectional.
+            bool allowed = (p.maskKind == 2u) || (posK <= posQ);
+            if (p.maskKind == 1u) allowed = allowed && ((posQ - posK) < p.slidingWindow);
 
             float acc = -INFINITY;
             if (allowed) {

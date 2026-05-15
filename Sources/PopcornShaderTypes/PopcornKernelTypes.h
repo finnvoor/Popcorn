@@ -115,6 +115,9 @@ typedef struct {
     uint32_t Hd;
 } AttentionOutputConstants;
 
+// `maskKind` is the tagged-union discriminator from Swift `AttentionMask`:
+//   0 = causal, 1 = causal + sliding window, 2 = bidirectional.
+// `slidingWindow` is only consulted when `maskKind == 1`.
 typedef struct {
     uint32_t B;
     uint32_t Nq;
@@ -122,6 +125,7 @@ typedef struct {
     uint32_t Sq;
     uint32_t Sk;
     uint32_t Hd;
+    uint32_t maskKind;
     int32_t  slidingWindow;
     float    scale;
 } FlashAttentionConstants;
@@ -134,6 +138,7 @@ typedef struct {
     uint32_t Sk;
     uint32_t Hd;
     uint32_t qTilesPerHead;
+    uint32_t maskKind;
     int32_t  slidingWindow;
     float    scale;
 } MPPFlashAttentionConstants;
@@ -145,6 +150,7 @@ typedef struct {
     uint32_t Sk;
     uint32_t Hd;
     uint32_t P;            // number of KV partitions per (b, hq)
+    uint32_t maskKind;
     int32_t  slidingWindow;
     float    scale;
 } FlashDecodingPartialConstants;

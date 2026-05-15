@@ -17,7 +17,7 @@ struct _FlashDecoding: Kernel {
         keyLen: Int,
         headDim: Int,
         scale: Float,
-        slidingWindow: Int? = nil
+        mask: AttentionMask
     ) throws {
         guard queryHeads.isMultiple(of: kvHeads) else {
             throw PopcornError.tensorShapeMismatch(
@@ -37,7 +37,7 @@ struct _FlashDecoding: Kernel {
         self.keyLen = keyLen
         self.headDim = headDim
         self.scale = scale
-        self.slidingWindow = slidingWindow
+        self.mask = mask
     }
 
     // MARK: Internal
@@ -62,7 +62,7 @@ struct _FlashDecoding: Kernel {
                 partialO: partialO, partialM: partialM, partialL: partialL,
                 batch: batch, queryHeads: queryHeads, kvHeads: kvHeads,
                 keyLen: keyLen, headDim: headDim, partitions: Self.partitions,
-                scale: scale, slidingWindow: slidingWindow
+                scale: scale, mask: mask
             )
             try encoder.dispatch(partial)
             try encoder.dispatch(_FDReduce(
@@ -86,7 +86,7 @@ struct _FlashDecoding: Kernel {
     private let keyLen: Int
     private let headDim: Int
     private let scale: Float
-    private let slidingWindow: Int?
+    private let mask: AttentionMask
 }
 
 // MARK: - _FDPartial
@@ -108,7 +108,7 @@ struct _FDPartial: DispatchKernel {
         headDim: Int,
         partitions: Int,
         scale: Float,
-        slidingWindow: Int? = nil
+        mask: AttentionMask
     ) throws {
         self.q = q
         self.k = k
@@ -130,7 +130,8 @@ struct _FDPartial: DispatchKernel {
             Sk: UInt32(keyLen),
             Hd: UInt32(headDim),
             P: UInt32(partitions),
-            slidingWindow: Int32(slidingWindow ?? -1),
+            maskKind: mask.kindRawValue,
+            slidingWindow: mask.slidingWindow,
             scale: scale
         )]
         self.batch = batch

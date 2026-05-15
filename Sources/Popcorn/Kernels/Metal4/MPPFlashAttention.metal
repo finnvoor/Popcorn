@@ -84,8 +84,16 @@ kernel void mpp_flash_attention_typed(
     uint sBase = ((b * p.Nq + hq) * p.qTilesPerHead + qTile) * uint(Br) * uint(kMPPFA_Bc);
     uint tBase = ((b * p.Nq + hq) * p.qTilesPerHead + qTile) * uint(Br) * uint(MaxHd);
 
-    // Zero O.
-    for (uint idx = tid; idx < uint(Br) * Hd; idx += kMPPFA_TG) {
+    // Zero O. The accumulator is indexed as O_sm[r * MaxHd + d] (so each
+    // row spans MaxHd slots, not Hd), and `MaxHd >= Hd` is the storage
+    // stride. Earlier versions only zeroed the first Br*Hd slots, which left
+    // the [Hd, MaxHd) gap and rows >= Hd/MaxHd worth of memory uninitialized
+    // — those slots could hold NaN bit patterns. With a causal mask the
+    // initial `O_sm *= scale_old` (scale_old == 0 on the very first tile)
+    // happens to wash that out, but bidirectional softmax can leave it in
+    // place. Zero the entire Br*MaxHd region so the accumulator is well
+    // defined regardless of attention mask.
+    for (uint idx = tid; idx < uint(Br) * uint(MaxHd); idx += kMPPFA_TG) {
         O_sm[idx] = 0.0f;
     }
     if (tid < uint(Br)) {
@@ -133,36 +141,45 @@ kernel void mpp_flash_attention_typed(
         threadgroup_barrier(mem_flags::mem_device);
 
         // Apply scale + mask, run online softmax per query row.
+        // All threads MUST execute every barrier in this loop — Metal's
+        // behavior is undefined under barrier divergence. Inactive rows
+        // (r >= qRows) participate in every barrier but skip the work that
+        // would otherwise corrupt scratch state.
+        // maskKind: 0 = causal, 1 = causal + sliding window, 2 = bidirectional.
         for (uint r = 0; r < uint(Br); ++r) {
-            if (r >= qRows) {
-                threadgroup_barrier(mem_flags::mem_threadgroup);
-                continue;
-            }
-            int posQ = posQBase + int(r);
+            bool active = (r < qRows);
+            int posQ = active ? (posQBase + int(r)) : 0;
             device float* sRow = sScratch + sBase + r * uint(kMPPFA_Bc);
 
             // 1. Apply scale + mask. Zero trailing columns beyond Bc_actual.
-            for (uint j = tid; j < uint(kMPPFA_Bc); j += kMPPFA_TG) {
-                if (j < Bc_actual) {
-                    int posK = int(jStart + j);
-                    bool allowed = posK <= posQ;
-                    if (p.slidingWindow >= 0) allowed = allowed && ((posQ - posK) < p.slidingWindow);
-                    sRow[j] = allowed ? (sRow[j] * p.scale) : -INFINITY;
-                } else {
-                    sRow[j] = -INFINITY;
+            // For inactive rows the scratch slot is unused downstream, so we
+            // skip the write entirely — but every thread still reaches the
+            // barrier below.
+            if (active) {
+                for (uint j = tid; j < uint(kMPPFA_Bc); j += kMPPFA_TG) {
+                    if (j < Bc_actual) {
+                        int posK = int(jStart + j);
+                        bool allowed = (p.maskKind == 2u) || (posK <= posQ);
+                        if (p.maskKind == 1u) allowed = allowed && ((posQ - posK) < p.slidingWindow);
+                        sRow[j] = allowed ? (sRow[j] * p.scale) : -INFINITY;
+                    } else {
+                        sRow[j] = -INFINITY;
+                    }
                 }
             }
             threadgroup_barrier(mem_flags::mem_device);
 
             // 2. Row max -> m_new + scale_old.
             float local_max = -INFINITY;
-            for (uint j = tid; j < Bc_actual; j += kMPPFA_TG) {
-                local_max = max(local_max, sRow[j]);
+            if (active) {
+                for (uint j = tid; j < Bc_actual; j += kMPPFA_TG) {
+                    local_max = max(local_max, sRow[j]);
+                }
             }
             local_max = simd_max(local_max);
-            if (lane == 0) reduce_sm[sgid] = local_max;
+            if (lane == 0) reduce_sm[sgid] = active ? local_max : -INFINITY;
             threadgroup_barrier(mem_flags::mem_threadgroup);
-            if (sgid == 0) {
+            if (active && sgid == 0) {
                 float v = (lane < kMPPFA_SimdgroupCount) ? reduce_sm[lane] : -INFINITY;
                 v = simd_max(v);
                 if (lane == 0) {
@@ -178,19 +195,21 @@ kernel void mpp_flash_attention_typed(
 
             // 3. P = exp(S - m_new); scale O row by scale_old; accumulate sum.
             float p_local = 0.0f;
-            for (uint j = tid; j < uint(kMPPFA_Bc); j += kMPPFA_TG) {
-                float s = sRow[j];
-                float pv = (j < Bc_actual) ? exp(s - m_new) : 0.0f;
-                sRow[j] = pv;
-                p_local += pv;
-            }
-            for (uint d = tid; d < Hd; d += kMPPFA_TG) {
-                O_sm[r * MaxHd + d] *= scale_old;
+            if (active) {
+                for (uint j = tid; j < uint(kMPPFA_Bc); j += kMPPFA_TG) {
+                    float s = sRow[j];
+                    float pv = (j < Bc_actual) ? exp(s - m_new) : 0.0f;
+                    sRow[j] = pv;
+                    p_local += pv;
+                }
+                for (uint d = tid; d < Hd; d += kMPPFA_TG) {
+                    O_sm[r * MaxHd + d] *= scale_old;
+                }
             }
             p_local = simd_sum(p_local);
             if (lane == 0) reduce_sm[sgid] = p_local;
             threadgroup_barrier(mem_flags::mem_threadgroup);
-            if (sgid == 0) {
+            if (active && sgid == 0) {
                 float v = (lane < kMPPFA_SimdgroupCount) ? reduce_sm[lane] : 0.0f;
                 v = simd_sum(v);
                 if (lane == 0) {

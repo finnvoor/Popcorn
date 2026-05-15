@@ -22,7 +22,7 @@ public extension Kernels {
             keyLen: Int,
             headDim: Int,
             scale: Float,
-            slidingWindow: Int? = nil
+            mask: AttentionMask = .causal
         ) throws {
             guard queryHeads.isMultiple(of: kvHeads) else {
                 throw PopcornError.tensorShapeMismatch(
@@ -45,7 +45,7 @@ public extension Kernels {
             self.keyLen = keyLen
             self.headDim = headDim
             self.scale = scale
-            self.slidingWindow = slidingWindow
+            self.mask = mask
         }
 
         public init(
@@ -54,7 +54,7 @@ public extension Kernels {
             v: Tensor,
             into out: Tensor,
             scale: Float,
-            slidingWindow: Int? = nil
+            mask: AttentionMask = .causal
         ) throws {
             guard q.shape.rank == 4 else { throw PopcornError.tensorInvalidRank(expected: 4, actual: q.shape.rank) }
             guard k.shape.rank == 4 else { throw PopcornError.tensorInvalidRank(expected: 4, actual: k.shape.rank) }
@@ -85,7 +85,7 @@ public extension Kernels {
                 q: q, k: k, v: v, out: out,
                 batch: batch, queryHeads: queryHeads, kvHeads: kvHeads,
                 queryLen: queryLen, keyLen: keyLen, headDim: headDim,
-                scale: scale, slidingWindow: slidingWindow
+                scale: scale, mask: mask
             )
         }
 
@@ -119,21 +119,21 @@ public extension Kernels {
                     q: q, k: k, v: v, out: out,
                     batch: batch, queryHeads: queryHeads, kvHeads: kvHeads,
                     keyLen: keyLen, headDim: headDim,
-                    scale: scale, slidingWindow: slidingWindow
+                    scale: scale, mask: mask
                 ))
             case .mpp:
                 try encoder.encode(_MPPFlashAttention(
                     q: q, k: k, v: v, out: out,
                     batch: batch, queryHeads: queryHeads, kvHeads: kvHeads,
                     queryLen: queryLen, keyLen: keyLen, headDim: headDim,
-                    scale: scale, slidingWindow: slidingWindow
+                    scale: scale, mask: mask
                 ))
             case .plain:
                 try encoder.dispatch(_FlashAttentionPlain(
                     q: q, k: k, v: v, out: out,
                     batch: batch, queryHeads: queryHeads, kvHeads: kvHeads,
                     queryLen: queryLen, keyLen: keyLen, headDim: headDim,
-                    scale: scale, slidingWindow: slidingWindow
+                    scale: scale, mask: mask
                 ))
             }
         }
@@ -151,7 +151,7 @@ public extension Kernels {
         private let keyLen: Int
         private let headDim: Int
         private let scale: Float
-        private let slidingWindow: Int?
+        private let mask: AttentionMask
     }
 }
 
@@ -172,7 +172,7 @@ private struct _FlashAttentionPlain: DispatchKernel {
         keyLen: Int,
         headDim: Int,
         scale: Float,
-        slidingWindow: Int? = nil
+        mask: AttentionMask
     ) throws {
         self.q = q
         self.k = k
@@ -195,7 +195,8 @@ private struct _FlashAttentionPlain: DispatchKernel {
             Sq: UInt32(queryLen),
             Sk: UInt32(keyLen),
             Hd: UInt32(headDim),
-            slidingWindow: Int32(slidingWindow ?? -1),
+            maskKind: mask.kindRawValue,
+            slidingWindow: mask.slidingWindow,
             scale: scale
         )]
         dispatchGrid = MTLSize(width: batch * Self.tgWidth, height: queryHeads, depth: queryLen)
@@ -247,7 +248,7 @@ private struct _MPPFlashAttention: Kernel {
         keyLen: Int,
         headDim: Int,
         scale: Float,
-        slidingWindow: Int? = nil
+        mask: AttentionMask
     ) {
         self.q = q
         self.k = k
@@ -260,7 +261,7 @@ private struct _MPPFlashAttention: Kernel {
         self.keyLen = keyLen
         self.headDim = headDim
         self.scale = scale
-        self.slidingWindow = slidingWindow
+        self.mask = mask
     }
 
     // MARK: Internal
@@ -290,7 +291,7 @@ private struct _MPPFlashAttention: Kernel {
                 sScratch: sScratch, tScratch: tScratch,
                 batch: batch, queryHeads: queryHeads, kvHeads: kvHeads,
                 queryLen: queryLen, keyLen: keyLen, headDim: headDim,
-                scale: scale, slidingWindow: slidingWindow
+                scale: scale, mask: mask
             ))
         }
     }
@@ -324,7 +325,7 @@ private struct _MPPFlashAttention: Kernel {
     private let keyLen: Int
     private let headDim: Int
     private let scale: Float
-    private let slidingWindow: Int?
+    private let mask: AttentionMask
 }
 
 // MARK: - _MPPFAPass
@@ -346,7 +347,7 @@ private struct _MPPFAPass: DispatchKernel {
         keyLen: Int,
         headDim: Int,
         scale: Float,
-        slidingWindow: Int? = nil
+        mask: AttentionMask
     ) throws {
         self.q = q
         self.k = k
@@ -383,7 +384,8 @@ private struct _MPPFAPass: DispatchKernel {
             Sk: UInt32(keyLen),
             Hd: UInt32(headDim),
             qTilesPerHead: UInt32(qTilesPerHead),
-            slidingWindow: Int32(slidingWindow ?? -1),
+            maskKind: mask.kindRawValue,
+            slidingWindow: mask.slidingWindow,
             scale: scale
         )]
         dispatchGrid = MTLSize(width: batch * Self.tgWidth, height: queryHeads, depth: qTilesPerHead)
