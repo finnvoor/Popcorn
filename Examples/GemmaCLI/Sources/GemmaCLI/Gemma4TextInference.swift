@@ -20,7 +20,12 @@ final class Gemma4TextInference {
         try Self.preallocateScratch(context, config: config, maxSeqLen: maxSeqLen)
 
         let archive = try device.makeSafeTensors(from: modelDirectory.appendingPathComponent("model.safetensors"))
-        weights = try Gemma4Weights(device: device, archive: archive, layerCount: config.numHiddenLayers)
+        weights = try Gemma4Weights(
+            device: device,
+            archive: archive,
+            layerCount: config.numHiddenLayers,
+            quantization: config.quantization
+        )
         workspace = try Workspace(device: device, config: config, maxSeqLen: maxSeqLen)
         rope = try RopeTables(device: device, config: config)
 
@@ -177,10 +182,8 @@ final class Gemma4TextInference {
         let ids = idsTensor
         let positions = positionsTensor
 
-        try encoder.encode {
-            try Kernels.EmbeddingGather(ids: ids, table: weights.embedTokens, into: h0)
-            try Kernels.ScalarMul(h0, by: Float(sqrt(Double(config.hiddenSize))), into: h1)
-        }
+        try weights.embedTokens.encodeGather(ids: ids, into: h0, on: encoder)
+        try encoder.encode(Kernels.ScalarMul(h0, by: Float(sqrt(Double(config.hiddenSize))), into: h1))
         let inputEmbeds = h1
 
         try encodePerLayerInputs(ids: ids, inputEmbeds: inputEmbeds, tokenCount: t, encoder: encoder)
@@ -198,9 +201,9 @@ final class Gemma4TextInference {
         try encoder.encode {
             try Kernels.RMSNorm(current, weight: weights.finalNorm, into: finalNorm, eps: config.rmsNormEps)
             try Kernels.RowSlice2D(finalNorm, into: workspace.lastHidden, rowOffset: t - 1)
-            try Kernels.Matmul(workspace.lastHidden, weights.embedTokens, into: workspace.logits, transposeB: true)
-            try Kernels.Argmax(workspace.logits, indices: outputToken)
         }
+        try weights.embedTokens.encodeLMHead(workspace.lastHidden, into: workspace.logits, on: encoder)
+        try encoder.encode(Kernels.Argmax(workspace.logits, indices: outputToken))
     }
 
     private func encodePerLayerInputs(ids: Tensor, inputEmbeds: Tensor, tokenCount t: Int, encoder: KernelCommandEncoder) throws {
@@ -219,10 +222,10 @@ final class Gemma4TextInference {
         let sum = workspace.pleSum.view(shape: [t, totalColumns])
         let full = workspace.pleFull.view(shape: [t, totalColumns])
 
+        try weights.embedTokensPerLayer.encodeGather(ids: ids, into: tokenRaw, on: encoder)
+        try encoder.encode(Kernels.ScalarMul(tokenRaw, by: Float(sqrt(Double(pleDim))), into: tokenScaled))
+        try weights.perLayerModelProjection.encodeMatmul(inputEmbeds, into: contextRaw, on: encoder)
         try encoder.encode {
-            try Kernels.EmbeddingGather(ids: ids, table: weights.embedTokensPerLayer, into: tokenRaw)
-            try Kernels.ScalarMul(tokenRaw, by: Float(sqrt(Double(pleDim))), into: tokenScaled)
-            try Kernels.Matmul(inputEmbeds, weights.perLayerModelProjection, into: contextRaw, transposeB: true)
             try Kernels.ScalarMul(contextRaw, by: Float(1 / sqrt(Double(config.hiddenSize))), into: contextScaled)
             try Kernels.RMSNorm(contextScaledPerLayer, weight: weights.perLayerProjectionNorm, into: contextNorm, eps: config.rmsNormEps)
             try Kernels.Add(tokenScaledPerLayer, contextNorm, into: sumPerLayer)
@@ -328,20 +331,16 @@ final class Gemma4TextInference {
         let qRoped = workspace.qRope.view(shape: [1, t, config.numAttentionHeads, headDim])
         let qAttn = workspace.qAttn.view(shape: [1, config.numAttentionHeads, t, headDim])
 
-        try encoder.encode {
-            try Kernels.RMSNorm(input, weight: layer.inputLayerNorm, into: normHidden, eps: config.rmsNormEps)
-            try Kernels.Matmul(normHidden, layer.qProj, into: qFlat, transposeB: true)
-        }
+        try encoder.encode(Kernels.RMSNorm(input, weight: layer.inputLayerNorm, into: normHidden, eps: config.rmsNormEps))
+        try layer.qProj.encodeMatmul(normHidden, into: qFlat, on: encoder)
 
         let kvSourceLayer = config.kvSourceLayer(for: layerIndex)
         let ownsKVCache = kvSourceLayer == layerIndex
         if ownsKVCache {
             let kFlat = workspace.kRaw.view(shape: [t, kvWidth])
             let vFlat = workspace.vRaw.view(shape: [t, kvWidth])
-            try encoder.encode {
-                try Kernels.Matmul(normHidden, layer.kProj!, into: kFlat, transposeB: true)
-                try Kernels.Matmul(normHidden, layer.vProj!, into: vFlat, transposeB: true)
-            }
+            try layer.kProj!.encodeMatmul(normHidden, into: kFlat, on: encoder)
+            try layer.vProj!.encodeMatmul(normHidden, into: vFlat, on: encoder)
         }
 
         let cos = isSliding
@@ -398,7 +397,9 @@ final class Gemma4TextInference {
                 mask: isSliding ? .causalSlidingWindow(window: config.slidingWindow) : .causal
             )
             try Kernels.Transpose12(attnOut, into: attnReshaped)
-            try Kernels.Matmul(attnFlat, layer.oProj, into: attnProjected, transposeB: true)
+        }
+        try layer.oProj.encodeMatmul(attnFlat, into: attnProjected, on: encoder)
+        try encoder.encode {
             try Kernels.RMSNorm(attnProjected, weight: layer.postAttentionLayerNorm, into: attnNorm, eps: config.rmsNormEps)
             try Kernels.Add(input, attnNorm, into: output)
         }
@@ -420,13 +421,15 @@ final class Gemma4TextInference {
         let down = workspace.mlpDown.view(shape: [t, config.hiddenSize])
         let ffnNorm = workspace.ffnNorm.view(shape: [t, config.hiddenSize])
 
+        try encoder.encode(Kernels.RMSNorm(input, weight: layer.preFeedforwardLayerNorm, into: normHidden, eps: config.rmsNormEps))
+        try layer.gateProj.encodeMatmul(normHidden, into: gate, on: encoder)
+        try layer.upProj.encodeMatmul(normHidden, into: up, on: encoder)
         try encoder.encode {
-            try Kernels.RMSNorm(input, weight: layer.preFeedforwardLayerNorm, into: normHidden, eps: config.rmsNormEps)
-            try Kernels.Matmul(normHidden, layer.gateProj, into: gate, transposeB: true)
-            try Kernels.Matmul(normHidden, layer.upProj, into: up, transposeB: true)
             try Kernels.GeluTanh(gate, into: gateAct)
             try Kernels.Mul(gateAct, up, into: gated)
-            try Kernels.Matmul(gated, layer.downProj, into: down, transposeB: true)
+        }
+        try layer.downProj.encodeMatmul(gated, into: down, on: encoder)
+        try encoder.encode {
             try Kernels.RMSNorm(down, weight: layer.postFeedforwardLayerNorm, into: ffnNorm, eps: config.rmsNormEps)
             try Kernels.Add(input, ffnNorm, into: output)
         }
@@ -449,12 +452,14 @@ final class Gemma4TextInference {
         let pleNorm = workspace.pleNorm.view(shape: [t, config.hiddenSize])
         let pleFull = workspace.pleFull.view(shape: [t, config.numHiddenLayers * pleDim])
 
+        try encoder.encode(Kernels.Slice2D(pleFull, into: pleLayer, columnOffset: layerIndex * pleDim))
+        try layer.perLayerInputGate.encodeMatmul(input, into: pleGate, on: encoder)
         try encoder.encode {
-            try Kernels.Slice2D(pleFull, into: pleLayer, columnOffset: layerIndex * pleDim)
-            try Kernels.Matmul(input, layer.perLayerInputGate, into: pleGate, transposeB: true)
             try Kernels.GeluTanh(pleGate, into: pleGateAct)
             try Kernels.Mul(pleGateAct, pleLayer, into: pleGated)
-            try Kernels.Matmul(pleGated, layer.perLayerProjection, into: pleProjected, transposeB: true)
+        }
+        try layer.perLayerProjection.encodeMatmul(pleGated, into: pleProjected, on: encoder)
+        try encoder.encode {
             try Kernels.RMSNorm(pleProjected, weight: layer.postPerLayerInputNorm, into: pleNorm, eps: config.rmsNormEps)
             try Kernels.Add(input, pleNorm, into: output)
         }

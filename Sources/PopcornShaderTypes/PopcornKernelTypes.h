@@ -236,3 +236,20 @@ typedef struct {
     uint32_t hasBias;
     float eps;
 } GroupNormConstants;
+
+typedef struct {
+    uint32_t M;
+    uint32_t N;
+    uint32_t K;
+    uint32_t kGroups;
+    uint32_t wordsPerRow;
+    uint32_t hasBias;
+} AffineQMatmulConstants;
+
+typedef struct {
+    uint32_t T;
+    uint32_t H;
+    uint32_t kGroups;
+    uint32_t wordsPerRow;
+    uint32_t hasBias;
+} AffineQEmbeddingGatherConstants;

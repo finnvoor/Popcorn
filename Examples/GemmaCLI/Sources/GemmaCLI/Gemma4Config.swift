@@ -8,6 +8,12 @@ struct Gemma4Config {
         case full = "full_attention"
     }
 
+    struct Quantization {
+        let bits: Int
+        let groupSize: Int
+        let mode: String
+    }
+
     let hiddenSize: Int
     let hiddenSizePerLayerInput: Int
     let intermediateSize: Int
@@ -24,6 +30,7 @@ struct Gemma4Config {
     let finalLogitSoftcap: Float
     let eosTokenId: Int
     let layerTypes: [LayerType]
+    let quantization: Quantization?
 
     static func load(from url: URL) throws -> Gemma4Config {
         let data = try Data(contentsOf: url)
@@ -32,6 +39,16 @@ struct Gemma4Config {
             let text = root["text_config"] as? [String: Any]
         else {
             throw GemmaError.message("config.json does not contain text_config.")
+        }
+
+        let quantization: Quantization? = if let q = root["quantization"] as? [String: Any] {
+            try Quantization(
+                bits: requireInt(q, "bits"),
+                groupSize: requireInt(q, "group_size"),
+                mode: (q["mode"] as? String) ?? "affine"
+            )
+        } else {
+            nil
         }
 
         let layerTypeStrings: [String] = try requireArray(text, "layer_types")
@@ -56,7 +73,8 @@ struct Gemma4Config {
                     throw GemmaError.message("Unsupported layer type \(value).")
                 }
                 return layerType
-            }
+            },
+            quantization: quantization
         )
     }
 

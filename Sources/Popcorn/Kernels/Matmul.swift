@@ -16,7 +16,7 @@ public extension Kernels {
             transposeB: Bool = false
         ) throws {
             self.a = a
-            self.b = b
+            rhs = .dense(b)
             self.c = c
 
             if m == 1 {
@@ -92,6 +92,44 @@ public extension Kernels {
             try self.init(a: a, b: b, c: c, m: m, k: k, n: n, transposeB: transposeB)
         }
 
+        /// Multiplies by a block-affine quantized RHS stored in linear-layer layout.
+        ///
+        /// `b` has logical shape `[outFeatures, inFeatures]`; this initializer computes
+        /// `c = a @ b^T`, matching the dense `transposeB: true` linear-layer convention.
+        public init(_ a: Tensor, _ b: AffineQuantizedTensor, into c: Tensor) throws {
+            guard a.shape.rank == 2 else {
+                throw PopcornError.tensorInvalidRank(expected: 2, actual: a.shape.rank)
+            }
+            guard c.shape.rank == 2 else {
+                throw PopcornError.tensorInvalidRank(expected: 2, actual: c.shape.rank)
+            }
+
+            let m = a.shape[0]
+            let k = a.shape[1]
+            let n = b.outFeatures
+
+            guard b.inFeatures == k else {
+                throw PopcornError.tensorShapeMismatch(
+                    "Matmul quantized RHS shape mismatch: a.shape=[\(m),\(k)] but b.inFeatures=\(b.inFeatures)."
+                )
+            }
+            guard c.shape.dimensions == [m, n] else {
+                throw PopcornError.tensorShapeMismatch(
+                    "Matmul output shape mismatch: expected [\(m),\(n)], got \(c.shape.dimensions)."
+                )
+            }
+
+            self.a = a
+            rhs = .affineQuantized(packedValues: b.packedValues, scales: b.scales, biases: b.biases ?? b.scales)
+            self.c = c
+
+            let configuration = try Self.affineQuantizedConfiguration(x: a, w: b, out: c, m: m, k: k, n: n)
+            functionName = configuration.functionName
+            constants = configuration.constants
+            dispatchGrid = configuration.grid
+            dispatchThreadgroupSize = configuration.threadgroupSize
+        }
+
         // MARK: Public
 
         public var functionName: String
@@ -99,11 +137,22 @@ public extension Kernels {
         public var constants: [any BitwiseCopyable]
 
         public var tensors: [Tensor.Binding] {
-            [
-                .init(tensor: a, access: .read),
-                .init(tensor: b, access: .read),
-                .init(tensor: c, access: .write)
-            ]
+            switch rhs {
+            case let .dense(b):
+                [
+                    .init(tensor: a, access: .read),
+                    .init(tensor: b, access: .read),
+                    .init(tensor: c, access: .write)
+                ]
+            case let .affineQuantized(packedValues, scales, biases):
+                [
+                    .init(tensor: packedValues, access: .read),
+                    .init(tensor: scales, access: .read),
+                    .init(tensor: biases, access: .read),
+                    .init(tensor: a, access: .read),
+                    .init(tensor: c, access: .write)
+                ]
+            }
         }
 
         public func dispatchSize(for _: MTLComputePipelineState) -> (grid: MTLSize, threadgroupSize: MTLSize) {
@@ -112,8 +161,13 @@ public extension Kernels {
 
         // MARK: Private
 
+        private enum RHS {
+            case dense(Tensor)
+            case affineQuantized(packedValues: Tensor, scales: Tensor, biases: Tensor)
+        }
+
         private let a: Tensor
-        private let b: Tensor
+        private let rhs: RHS
         private let c: Tensor
         private let dispatchGrid: MTLSize
         private let dispatchThreadgroupSize: MTLSize
@@ -219,6 +273,89 @@ public extension Kernels {
                 let grid = MTLSize(width: n, height: 1, depth: 1)
                 let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
                 return (functionName, constants, grid, threadgroupSize)
+            }
+        }
+
+        private static func affineQuantizedConfiguration(
+            x: Tensor,
+            w: AffineQuantizedTensor,
+            out: Tensor,
+            m: Int,
+            k: Int,
+            n: Int
+        ) throws -> (functionName: String, constants: [any BitwiseCopyable], grid: MTLSize, threadgroupSize: MTLSize) {
+            guard k % w.format.groupSize == 0 else {
+                throw PopcornError.tensorShapeMismatch(
+                    "Matmul quantized RHS: K=\(k) is not divisible by groupSize=\(w.format.groupSize)."
+                )
+            }
+            guard supportsAffineQuantizedMatmul(format: w.format, xDataType: x.dataType, scaleDataType: w.scales.dataType, outDataType: out.dataType) else {
+                throw PopcornError.unsupportedDataTypeCombination(
+                    "Unsupported affine quantized matmul combination: format=\(w.format), x=\(x.dataType), scales=\(w.scales.dataType), out=\(out.dataType)."
+                )
+            }
+
+            let xTag = dtypeTag(x.dataType)
+            let sTag = dtypeTag(w.scales.dataType)
+            let oTag = dtypeTag(out.dataType)
+            let kernelPrefix = m == 1 ? "aq_qmv_fast" : "aq_matvec_simd4"
+            let functionName = "\(kernelPrefix)_\(xTag)_\(sTag)_\(oTag)_b\(w.format.bits)_g\(w.format.groupSize)"
+
+            let perWord = w.format.valuesPerPackedElement
+            let constants = [AffineQMatmulConstants(
+                M: UInt32(m),
+                N: UInt32(n),
+                K: UInt32(k),
+                kGroups: UInt32(k / w.format.groupSize),
+                wordsPerRow: UInt32(k / perWord),
+                hasBias: w.biases == nil ? 0 : 1
+            )]
+
+            if m == 1 {
+                let rowBlocks = (n + 7) / 8
+                return (
+                    functionName,
+                    constants,
+                    MTLSize(width: m * 64, height: rowBlocks, depth: 1),
+                    MTLSize(width: 64, height: 1, depth: 1)
+                )
+            } else {
+                let nBlocks = (n + 3) / 4
+                let threadgroupWidth = min(128, max(32, nBlocks * 32))
+                return (
+                    functionName,
+                    constants,
+                    MTLSize(width: nBlocks * 32, height: m, depth: 1),
+                    MTLSize(width: threadgroupWidth, height: 1, depth: 1)
+                )
+            }
+        }
+
+        private static func supportsAffineQuantizedMatmul(
+            format: AffineQuantizationFormat,
+            xDataType: Tensor.DataType,
+            scaleDataType: Tensor.DataType,
+            outDataType: Tensor.DataType
+        ) -> Bool {
+            guard format.bits == 4, format.groupSize == 64, format.packing == .uint32LittleEndian else {
+                return false
+            }
+            switch (xDataType, scaleDataType, outDataType) {
+            case (.bf16, .bf16, .bf16),
+                 (.bf16, .bf16, .f32),
+                 (.f32, .bf16, .f32):
+                return true
+            default:
+                return false
+            }
+        }
+
+        private static func dtypeTag(_ dt: Tensor.DataType) -> String {
+            switch dt {
+            case .f32: "f32"
+            case .f16: "f16"
+            case .bf16: "bf16"
+            default: "unknown"
             }
         }
 

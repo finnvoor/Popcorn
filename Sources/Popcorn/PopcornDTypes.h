@@ -52,6 +52,22 @@ inline void popcorn_store4(device ushort* p, uint i4, float4 v) {
     ((device ushort4*)p)[i4] = r;
 }
 
+template <typename Word, uint bits>
+inline uint popcorn_unpack_little_endian(device const Word* packedValues, uint valueIndex) {
+    constexpr uint storageBits = sizeof(Word) * 8u;
+    static_assert(storageBits % bits == 0u, "bits must evenly divide the packed storage width");
+    constexpr uint valuesPerWord = storageBits / bits;
+    constexpr uint mask = (1u << bits) - 1u;
+    Word packed = packedValues[valueIndex / valuesPerWord];
+    return (uint(packed) >> ((valueIndex % valuesPerWord) * bits)) & mask;
+}
+
+template <uint bits>
+inline uint popcorn_unpack_from_word_little_endian(uint packed, uint valueInWord) {
+    constexpr uint mask = (1u << bits) - 1u;
+    return (packed >> (valueInWord * bits)) & mask;
+}
+
 template <uint bits>
 inline int popcorn_load_packed_signed(device const uchar* p, uint i) {
     constexpr uint mask = (1u << bits) - 1u;
