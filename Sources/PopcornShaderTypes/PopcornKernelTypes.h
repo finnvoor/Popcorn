@@ -219,3 +219,20 @@ typedef struct {
     uint32_t D2;
     uint32_t D3;
 } Transpose12Constants;
+
+typedef struct {
+    uint32_t H;
+    uint32_t hasWeight;
+    uint32_t hasBias;
+    float eps;
+} LayerNormConstants;
+
+typedef struct {
+    uint32_t N;
+    uint32_t C;
+    uint32_t L;
+    uint32_t groups;
+    uint32_t hasWeight;
+    uint32_t hasBias;
+    float eps;
+} GroupNormConstants;
